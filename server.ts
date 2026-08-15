@@ -40,7 +40,8 @@ import {
   getGitHubConfig,
   saveGitHubConfig,
   StorageConfigInfo,
-  StoredImageResult
+  StoredImageResult,
+  getUrlExtension
 } from './server/cloudStorage';
 
 const app = express();
@@ -301,7 +302,8 @@ async function processAndSaveImageAsync(
   destination: 'collection' | 'studio' | 'liveshow' | 'branding' | 'bespoke' | 'general' | string = 'general',
   associatedId = '',
   associatedTitle = '',
-  uploadedBy = 'admin'
+  uploadedBy = 'admin',
+  stableFilename?: string
 ): Promise<string> {
   if (!inputUrlOrDataUri || typeof inputUrlOrDataUri !== 'string') return inputUrlOrDataUri;
   const trimmed = inputUrlOrDataUri.trim();
@@ -309,20 +311,43 @@ async function processAndSaveImageAsync(
 
   const activeProvider = detectActiveStorageProvider();
 
+  // If destination is one of collection, studio, liveshow, format GitHub folder path correctly
+  const targetFolder = (activeProvider.provider === 'github' && ['collection', 'studio', 'liveshow'].includes(destination))
+    ? `images/${destination}`
+    : (destination || 'general');
+
+  // Compute a stable, unique filename for products if requested or if it's a product image
+  let computedStableFilename = stableFilename;
+  const isProductImage = ['collection', 'studio', 'liveshow'].includes(destination) && associatedId;
+  if (!computedStableFilename && isProductImage) {
+    let imgIndex = '1';
+    const match = prefix.match(/-(\d+)$/);
+    if (match) {
+      imgIndex = match[1];
+    }
+    const ext = getUrlExtension(trimmed);
+    computedStableFilename = `product-${associatedId}-${imgIndex}.${ext}`;
+  }
+
   // If already a permanent cloud URL on the active cloud provider
-  if (
+  const hasCorrectFolder = activeProvider.provider === 'github' && ['collection', 'studio', 'liveshow'].includes(destination)
+    ? trimmed.includes(`images/${destination}/`)
+    : true;
+
+  const isAlreadyPermanent = 
     (activeProvider.provider === 'cloudinary' && trimmed.includes('res.cloudinary.com')) ||
-    (activeProvider.provider === 'github' && (trimmed.includes('raw.githubusercontent.com') || trimmed.includes('github.com'))) ||
+    (activeProvider.provider === 'github' && (trimmed.includes('raw.githubusercontent.com') || trimmed.includes('github.com')) && hasCorrectFolder) ||
     (activeProvider.provider === 's3' && (trimmed.includes('amazonaws.com') || (activeProvider.customPublicUrl && trimmed.includes(activeProvider.customPublicUrl)))) ||
-    (activeProvider.provider === 'r2' && (trimmed.includes('r2.dev') || trimmed.includes('r2.cloudflarestorage.com') || (activeProvider.customPublicUrl && trimmed.includes(activeProvider.customPublicUrl))))
-  ) {
+    (activeProvider.provider === 'r2' && (trimmed.includes('r2.dev') || trimmed.includes('r2.cloudflarestorage.com') || (activeProvider.customPublicUrl && trimmed.includes(activeProvider.customPublicUrl))));
+
+  if (isAlreadyPermanent) {
     const existingIndex = uploadedImagesDb.findIndex(img => img.url === trimmed);
     if (existingIndex >= 0) {
       if (destination && destination !== 'general') uploadedImagesDb[existingIndex].destination = destination;
       if (associatedId) uploadedImagesDb[existingIndex].associatedId = associatedId;
       if (associatedTitle) uploadedImagesDb[existingIndex].associatedTitle = associatedTitle;
     } else {
-      const ext = trimmed.split('?')[0].split('.').pop() || 'jpg';
+      const ext = getUrlExtension(trimmed);
       uploadedImagesDb.unshift({
         id: `img-${Date.now()}-${crypto.randomBytes(3).toString('hex')}`,
         url: trimmed,
@@ -346,7 +371,9 @@ async function processAndSaveImageAsync(
     const uploadResult = await uploadImageToPermanentStorage(trimmed, {
       title: prefix,
       destination,
-      folder: process.env.STORAGE_FOLDER || process.env.CLOUDINARY_FOLDER || 'yared-couture'
+      folder: targetFolder,
+      filename: computedStableFilename,
+      useExactFilename: Boolean(computedStableFilename)
     });
 
     const record: UploadedImageRecord = {
@@ -386,24 +413,39 @@ async function migrateAllToCloudStorageAsync(): Promise<{
   provider: string;
   isCloudReady: boolean;
   errors: string[];
+  breakdown: {
+    liveshow: number;
+    collection: number;
+    studio: number;
+    failed: number;
+  };
 }> {
   const config = detectActiveStorageProvider();
   const errors: string[] = [];
   let migratedCount = 0;
   let totalScanned = 0;
 
+  let liveshowCount = 0;
+  let collectionCount = 0;
+  let studioCount = 0;
+  let failedCount = 0;
+
   const urlMap: Map<string, string> = new Map();
 
-  async function migrateUrl(oldUrl: string, namePrefix: string, dest = 'general'): Promise<string> {
+  async function migrateUrl(oldUrl: string, namePrefix: string, dest = 'general', stableFilename?: string): Promise<string> {
     if (!oldUrl || typeof oldUrl !== 'string') return oldUrl;
     totalScanned++;
 
-    // If already on a cloud provider matching current active cloud, skip
+    const hasCorrectFolder = config.provider === 'github' && ['collection', 'studio', 'liveshow'].includes(dest)
+      ? oldUrl.includes(`images/${dest}/`)
+      : true;
+
+    // If already on a cloud provider matching current active cloud AND in correct folder, skip
     if (
-      (config.provider === 'cloudinary' && oldUrl.includes('res.cloudinary.com')) ||
-      (config.provider === 'github' && (oldUrl.includes('raw.githubusercontent.com') || oldUrl.includes('github.com'))) ||
-      (config.provider === 's3' && (oldUrl.includes('amazonaws.com') || (config.customPublicUrl && oldUrl.includes(config.customPublicUrl)))) ||
-      (config.provider === 'r2' && (oldUrl.includes('r2.dev') || oldUrl.includes('r2.cloudflarestorage.com') || (config.customPublicUrl && oldUrl.includes(config.customPublicUrl))))
+      ((config.provider === 'cloudinary' && oldUrl.includes('res.cloudinary.com')) ||
+       (config.provider === 'github' && (oldUrl.includes('raw.githubusercontent.com') || oldUrl.includes('github.com')) && hasCorrectFolder) ||
+       (config.provider === 's3' && (oldUrl.includes('amazonaws.com') || (config.customPublicUrl && oldUrl.includes(config.customPublicUrl)))) ||
+       (config.provider === 'r2' && (oldUrl.includes('r2.dev') || oldUrl.includes('r2.cloudflarestorage.com') || (config.customPublicUrl && oldUrl.includes(config.customPublicUrl)))))
     ) {
       return oldUrl;
     }
@@ -413,7 +455,7 @@ async function migrateAllToCloudStorageAsync(): Promise<{
     }
 
     try {
-      const newUrl = await processAndSaveImageAsync(oldUrl, namePrefix, dest);
+      const newUrl = await processAndSaveImageAsync(oldUrl, namePrefix, dest, '', '', 'admin', stableFilename);
       if (newUrl && newUrl !== oldUrl && (newUrl.startsWith('http://') || newUrl.startsWith('https://'))) {
         urlMap.set(oldUrl, newUrl);
         migratedCount++;
@@ -421,6 +463,7 @@ async function migrateAllToCloudStorageAsync(): Promise<{
       }
     } catch (e: any) {
       errors.push(`Failed to migrate ${oldUrl}: ${e.message}`);
+      throw e;
     }
     return oldUrl;
   }
@@ -428,41 +471,93 @@ async function migrateAllToCloudStorageAsync(): Promise<{
   // 1. Migrate Products Images
   for (let i = 0; i < productsDb.length; i++) {
     const prod = productsDb[i];
+    const isStudio = Boolean(prod.collections && prod.collections.includes('studio'));
+    const isLiveshow = Boolean(prod.collections && prod.collections.includes('liveshow'));
+    const dest = isStudio ? 'studio' : (isLiveshow ? 'liveshow' : 'collection');
+
     if (Array.isArray(prod.images) && prod.images.length > 0) {
       const newImages: string[] = [];
       for (let j = 0; j < prod.images.length; j++) {
-        const migrated = await migrateUrl(prod.images[j], `${prod.name}-${j + 1}`, 'collection');
-        newImages.push(migrated);
+        const oldUrl = prod.images[j];
+        const ext = getUrlExtension(oldUrl);
+        const stableName = `product-${prod.id}-${j + 1}.${ext}`;
+        
+        try {
+          const errorsBefore = errors.length;
+          const migrated = await migrateUrl(oldUrl, `${prod.name}-${j + 1}`, dest, stableName);
+          newImages.push(migrated);
+          const errorsAfter = errors.length;
+
+          if (errorsAfter > errorsBefore) {
+            failedCount++;
+          } else {
+            if (dest === 'liveshow') liveshowCount++;
+            else if (dest === 'studio') studioCount++;
+            else collectionCount++;
+          }
+        } catch (err) {
+          failedCount++;
+          newImages.push(oldUrl);
+        }
       }
       productsDb[i].images = newImages;
+
+      // Persist migrated URLs to database (PostgreSQL) if configured
+      if (isDatabaseConfigured()) {
+        try {
+          await upsertSqlProduct(productsDb[i]);
+        } catch (dbErr: any) {
+          console.error(`[Storage Migration] Failed to persist product ${prod.id} to PostgreSQL:`, dbErr.message);
+        }
+      }
     }
   }
 
   // 2. Migrate Branding Images
-  if (brandingDb.logoUrl) brandingDb.logoUrl = await migrateUrl(brandingDb.logoUrl, 'brand-logo', 'branding');
-  if (brandingDb.officialLogoUrl) brandingDb.officialLogoUrl = await migrateUrl(brandingDb.officialLogoUrl, 'brand-logo', 'branding');
-  if (brandingDb.footerLogoUrl) brandingDb.footerLogoUrl = await migrateUrl(brandingDb.footerLogoUrl, 'brand-logo', 'branding');
-  if (brandingDb.faviconUrl) brandingDb.faviconUrl = await migrateUrl(brandingDb.faviconUrl, 'brand-favicon', 'branding');
-  if (brandingDb.heroBannerUrl) brandingDb.heroBannerUrl = await migrateUrl(brandingDb.heroBannerUrl, 'hero-primary', 'branding');
-  if (brandingDb.heroSecondaryUrl) brandingDb.heroSecondaryUrl = await migrateUrl(brandingDb.heroSecondaryUrl, 'hero-secondary', 'branding');
-  if (brandingDb.heroTertiaryUrl) brandingDb.heroTertiaryUrl = await migrateUrl(brandingDb.heroTertiaryUrl, 'hero-tertiary', 'branding');
-  if (brandingDb.aboutUsUrl) brandingDb.aboutUsUrl = await migrateUrl(brandingDb.aboutUsUrl, 'about-us', 'branding');
-  if (brandingDb.craftsmanshipUrl) brandingDb.craftsmanshipUrl = await migrateUrl(brandingDb.craftsmanshipUrl, 'craftsmanship', 'branding');
-  if (brandingDb.promotionalBannerUrl) brandingDb.promotionalBannerUrl = await migrateUrl(brandingDb.promotionalBannerUrl, 'promotional-banner', 'branding');
-  if (Array.isArray(brandingDb.lookbookUrls)) {
-    const newLookbooks: string[] = [];
-    for (let j = 0; j < brandingDb.lookbookUrls.length; j++) {
-      const migrated = await migrateUrl(brandingDb.lookbookUrls[j], `lookbook-${j + 1}`, 'branding');
-      newLookbooks.push(migrated);
+  if (brandingDb) {
+    if (brandingDb.logoUrl) brandingDb.logoUrl = await migrateUrl(brandingDb.logoUrl, 'brand-logo', 'branding').catch(() => brandingDb.logoUrl);
+    if (brandingDb.officialLogoUrl) brandingDb.officialLogoUrl = await migrateUrl(brandingDb.officialLogoUrl, 'brand-logo', 'branding').catch(() => brandingDb.officialLogoUrl);
+    if (brandingDb.footerLogoUrl) brandingDb.footerLogoUrl = await migrateUrl(brandingDb.footerLogoUrl, 'brand-logo', 'branding').catch(() => brandingDb.footerLogoUrl);
+    if (brandingDb.faviconUrl) brandingDb.faviconUrl = await migrateUrl(brandingDb.faviconUrl, 'brand-favicon', 'branding').catch(() => brandingDb.faviconUrl);
+    if (brandingDb.heroBannerUrl) brandingDb.heroBannerUrl = await migrateUrl(brandingDb.heroBannerUrl, 'hero-primary', 'branding').catch(() => brandingDb.heroBannerUrl);
+    if (brandingDb.heroSecondaryUrl) brandingDb.heroSecondaryUrl = await migrateUrl(brandingDb.heroSecondaryUrl, 'hero-secondary', 'branding').catch(() => brandingDb.heroSecondaryUrl);
+    if (brandingDb.heroTertiaryUrl) brandingDb.heroTertiaryUrl = await migrateUrl(brandingDb.heroTertiaryUrl, 'hero-tertiary', 'branding').catch(() => brandingDb.heroTertiaryUrl);
+    if (brandingDb.aboutUsUrl) brandingDb.aboutUsUrl = await migrateUrl(brandingDb.aboutUsUrl, 'about-us', 'branding').catch(() => brandingDb.aboutUsUrl);
+    if (brandingDb.craftsmanshipUrl) brandingDb.craftsmanshipUrl = await migrateUrl(brandingDb.craftsmanshipUrl, 'craftsmanship', 'branding').catch(() => brandingDb.craftsmanshipUrl);
+    if (brandingDb.promotionalBannerUrl) brandingDb.promotionalBannerUrl = await migrateUrl(brandingDb.promotionalBannerUrl, 'promotional-banner', 'branding').catch(() => brandingDb.promotionalBannerUrl);
+    if (Array.isArray(brandingDb.lookbookUrls)) {
+      const newLookbooks: string[] = [];
+      for (let j = 0; j < brandingDb.lookbookUrls.length; j++) {
+        const migrated = await migrateUrl(brandingDb.lookbookUrls[j], `lookbook-${j + 1}`, 'branding').catch(() => brandingDb.lookbookUrls[j]);
+        newLookbooks.push(migrated);
+      }
+      brandingDb.lookbookUrls = newLookbooks;
     }
-    brandingDb.lookbookUrls = newLookbooks;
   }
 
   // 3. Migrate Studio Images
   for (let i = 0; i < studioImagesDb.length; i++) {
     const img = studioImagesDb[i];
     if (img.imageUrl) {
-      studioImagesDb[i].imageUrl = await migrateUrl(img.imageUrl, img.title || 'studio-piece', 'studio');
+      try {
+        const errorsBefore = errors.length;
+        const stableName = `studio-${img.id || i + 1}.${getUrlExtension(img.imageUrl)}`;
+        const migrated = await migrateUrl(img.imageUrl, img.title || 'studio-piece', 'studio', stableName);
+        studioImagesDb[i].imageUrl = migrated;
+        const errorsAfter = errors.length;
+
+        if (errorsAfter > errorsBefore) {
+          failedCount++;
+        } else {
+          studioCount++;
+        }
+
+        if (isDatabaseConfigured()) {
+          await upsertSqlStudioImage(studioImagesDb[i]).catch(() => {});
+        }
+      } catch (err) {
+        failedCount++;
+      }
     }
   }
 
@@ -470,10 +565,14 @@ async function migrateAllToCloudStorageAsync(): Promise<{
   for (let i = 0; i < uploadedImagesDb.length; i++) {
     const rec = uploadedImagesDb[i];
     if (rec.url && !rec.url.startsWith('http')) {
-      const newUrl = await migrateUrl(rec.url, rec.originalName || rec.filename, rec.destination);
-      if (newUrl && newUrl !== rec.url) {
-        uploadedImagesDb[i].url = newUrl;
-        uploadedImagesDb[i].provider = config.provider;
+      try {
+        const newUrl = await migrateUrl(rec.url, rec.originalName || rec.filename, rec.destination);
+        if (newUrl && newUrl !== rec.url) {
+          uploadedImagesDb[i].url = newUrl;
+          uploadedImagesDb[i].provider = config.provider;
+        }
+      } catch (err) {
+        // ignore
       }
     }
   }
@@ -486,7 +585,13 @@ async function migrateAllToCloudStorageAsync(): Promise<{
     migratedCount,
     provider: config.providerName,
     isCloudReady: config.isCloudReady,
-    errors
+    errors,
+    breakdown: {
+      liveshow: liveshowCount,
+      collection: collectionCount,
+      studio: studioCount,
+      failed: failedCount
+    }
   };
 }
 
@@ -1930,33 +2035,46 @@ app.post('/api/products', async (req, res) => {
   const rawDestinations: string[] = Array.isArray(req.body.destinations) ? req.body.destinations : [];
   const rawCollections: string[] = Array.isArray(req.body.collections) ? req.body.collections : [];
 
-  const isLiveshowUpload = rawDestinations.includes('liveshow') ||
-    rawCollections.includes('liveshow') ||
-    req.body.destination === 'liveshow' ||
-    req.body.isLiveshow === true;
+  // Determine primary destination exclusively
+  let isStudioUpload = false;
+  let isLiveshowUpload = false;
+  let isCollectionUpload = false;
 
-  const isStudioUpload = rawDestinations.includes('studio') ||
-    rawCollections.includes('studio') ||
-    rawCollections.includes('studio-only') ||
-    Boolean(req.body.studioCategory && req.body.studioCategory.trim() !== '') ||
-    req.body.category === 'studio' ||
-    req.body.destination === 'studio';
-
-  const isCollectionUpload = rawDestinations.includes('collection') ||
-    rawCollections.includes('collection') ||
-    (!isLiveshowUpload && !isStudioUpload) ||
-    rawCollections.some(c => c !== 'liveshow' && c !== 'studio' && c !== 'studio-only');
+  if (rawDestinations.includes('studio') || req.body.destination === 'studio' || req.body.category === 'studio' || rawCollections.includes('studio')) {
+    isStudioUpload = true;
+  } else if (rawDestinations.includes('liveshow') || req.body.destination === 'liveshow' || req.body.isLiveshow === true || rawCollections.includes('liveshow')) {
+    isLiveshowUpload = true;
+  } else {
+    isCollectionUpload = true;
+  }
 
   const finalCollectionsSet = new Set<string>();
   const category = req.body.category || 'wedding';
-  finalCollectionsSet.add(category);
 
-  if (isCollectionUpload) finalCollectionsSet.add('collection');
-  if (isLiveshowUpload) finalCollectionsSet.add('liveshow');
-  if (isStudioUpload) finalCollectionsSet.add('studio');
+  if (isStudioUpload) {
+    finalCollectionsSet.add('studio');
+    if (category !== 'collection' && category !== 'liveshow') {
+      finalCollectionsSet.add(category);
+    }
+  } else if (isLiveshowUpload) {
+    finalCollectionsSet.add('liveshow');
+    if (category !== 'collection' && category !== 'studio') {
+      finalCollectionsSet.add(category);
+    }
+  } else {
+    finalCollectionsSet.add('collection');
+    if (category !== 'liveshow' && category !== 'studio') {
+      finalCollectionsSet.add(category);
+    }
+  }
 
   for (const c of rawCollections) {
-    if (c) finalCollectionsSet.add(c);
+    if (c) {
+      if (isStudioUpload && (c === 'collection' || c === 'liveshow')) continue;
+      if (isLiveshowUpload && (c === 'collection' || c === 'studio')) continue;
+      if (isCollectionUpload && (c === 'liveshow' || c === 'studio')) continue;
+      finalCollectionsSet.add(c);
+    }
   }
 
   const finalCollections = Array.from(finalCollectionsSet);
@@ -2029,33 +2147,46 @@ app.put('/api/products/:id', async (req, res) => {
   const rawDestinations: string[] = Array.isArray(req.body.destinations) ? req.body.destinations : [];
   const rawCollections: string[] = Array.isArray(req.body.collections) ? req.body.collections : [];
 
-  const isLiveshowUpload = rawDestinations.includes('liveshow') ||
-    rawCollections.includes('liveshow') ||
-    req.body.destination === 'liveshow' ||
-    req.body.isLiveshow === true;
+  // Determine primary destination exclusively
+  let isStudioUpload = false;
+  let isLiveshowUpload = false;
+  let isCollectionUpload = false;
 
-  const isStudioUpload = rawDestinations.includes('studio') ||
-    rawCollections.includes('studio') ||
-    rawCollections.includes('studio-only') ||
-    Boolean(req.body.studioCategory && req.body.studioCategory.trim() !== '') ||
-    req.body.category === 'studio' ||
-    req.body.destination === 'studio';
-
-  const isCollectionUpload = rawDestinations.includes('collection') ||
-    rawCollections.includes('collection') ||
-    (!isLiveshowUpload && !isStudioUpload) ||
-    rawCollections.some(c => c !== 'liveshow' && c !== 'studio' && c !== 'studio-only');
+  if (rawDestinations.includes('studio') || req.body.destination === 'studio' || req.body.category === 'studio' || rawCollections.includes('studio')) {
+    isStudioUpload = true;
+  } else if (rawDestinations.includes('liveshow') || req.body.destination === 'liveshow' || req.body.isLiveshow === true || rawCollections.includes('liveshow')) {
+    isLiveshowUpload = true;
+  } else {
+    isCollectionUpload = true;
+  }
 
   const category = req.body.category || existingProduct.category || 'wedding';
   const finalCollectionsSet = new Set<string>();
-  finalCollectionsSet.add(category);
 
-  if (isCollectionUpload) finalCollectionsSet.add('collection');
-  if (isLiveshowUpload) finalCollectionsSet.add('liveshow');
-  if (isStudioUpload) finalCollectionsSet.add('studio');
+  if (isStudioUpload) {
+    finalCollectionsSet.add('studio');
+    if (category !== 'collection' && category !== 'liveshow') {
+      finalCollectionsSet.add(category);
+    }
+  } else if (isLiveshowUpload) {
+    finalCollectionsSet.add('liveshow');
+    if (category !== 'collection' && category !== 'studio') {
+      finalCollectionsSet.add(category);
+    }
+  } else {
+    finalCollectionsSet.add('collection');
+    if (category !== 'liveshow' && category !== 'studio') {
+      finalCollectionsSet.add(category);
+    }
+  }
 
   for (const c of rawCollections) {
-    if (c) finalCollectionsSet.add(c);
+    if (c) {
+      if (isStudioUpload && (c === 'collection' || c === 'liveshow')) continue;
+      if (isLiveshowUpload && (c === 'collection' || c === 'studio')) continue;
+      if (isCollectionUpload && (c === 'liveshow' || c === 'studio')) continue;
+      finalCollectionsSet.add(c);
+    }
   }
 
   const finalCollections = Array.from(finalCollectionsSet);

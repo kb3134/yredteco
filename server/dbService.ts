@@ -18,25 +18,27 @@ import { AdminUserRecord } from '../server.ts';
 
 // Helper to convert database product row to client Product type
 export function mapRowToProduct(row: typeof productsTable.$inferSelect): Product {
-  const collections = [...((row.collections as string[]) || [])];
-  if (row.isCollection && !collections.includes('collection')) {
-    collections.push('collection');
-  }
-  if (row.isLiveShow && !collections.includes('liveshow')) {
-    collections.push('liveshow');
-  }
-  if (row.isStudio && !collections.includes('studio')) {
-    collections.push('studio');
+  const collections = Array.isArray(row.collections) ? [...(row.collections as string[])] : [];
+  
+  // Clean other section indicator tags out of collections array
+  const cleanCollections = collections.filter(c => c !== 'collection' && c !== 'liveshow' && c !== 'studio' && c !== 'studio-only');
+
+  if (row.isStudio) {
+    cleanCollections.push('studio');
+  } else if (row.isLiveShow) {
+    cleanCollections.push('liveshow');
+  } else {
+    cleanCollections.push('collection');
   }
 
   return {
     id: row.id,
     name: row.name,
     amharicName: row.amharicName || '',
-    category: row.category,
-    collections,
-    priceUSD: row.price,
-    originalPriceUSD: row.originalPrice ?? undefined,
+    category: row.category as any,
+    collections: cleanCollections,
+    priceUSD: row.price ?? 0,
+    originalPriceUSD: row.originalPrice !== null ? row.originalPrice : undefined,
     rating: row.rating ?? 5.0,
     reviewsCount: row.reviewsCount ?? 0,
     inStock: row.inStock ?? true,
@@ -53,19 +55,38 @@ export function mapRowToProduct(row: typeof productsTable.$inferSelect): Product
     sizes: (row.sizes as string[]) || ['S', 'M', 'L', 'XL'],
     colors: (row.colors as string[]) || ['White & Gold'],
     weavingDays: row.weavingDays ?? 10,
-    studioCategory: row.studioCategory || ''
+    studioCategory: row.isStudio ? (row.studioCategory || '') : ''
   };
 }
 
 // Convert Product to database insert/update values
 export function mapProductToRow(p: Product) {
-  const isLive = Boolean(p.collections && p.collections.includes('liveshow')) || Boolean(p.isFeatured);
-  const isStudio = Boolean(p.studioCategory && p.studioCategory.trim() !== '') || 
-                  Boolean(p.collections && (p.collections.includes('studio') || p.collections.includes('studio-only'))) || 
-                  p.category === 'studio';
-  const isCollection = Boolean(p.collections && p.collections.includes('collection')) || 
-                      (!isLive && !isStudio) || 
-                      Boolean(p.collections && p.collections.some(c => c !== 'liveshow' && c !== 'studio' && c !== 'studio-only'));
+  let isStudio = false;
+  let isLive = false;
+  let isCollection = false;
+
+  const collections = Array.isArray(p.collections) ? [...p.collections] : [];
+
+  if (collections.includes('studio')) {
+    isStudio = true;
+  } else if (collections.includes('liveshow')) {
+    isLive = true;
+  } else {
+    isCollection = true;
+  }
+
+  // Ensure collections list is completely clean of conflicting section tags
+  const cleanCollections = collections.filter(c => c !== 'collection' && c !== 'liveshow' && c !== 'studio' && c !== 'studio-only');
+  if (isStudio) {
+    cleanCollections.push('studio');
+  } else if (isLive) {
+    cleanCollections.push('liveshow');
+  } else {
+    cleanCollections.push('collection');
+  }
+
+  // Ensure studioCategory is only set if it's a Studio product
+  const cleanStudioCategory = isStudio ? (p.studioCategory || p.category || 'traditional-dresses') : '';
 
   return {
     id: p.id,
@@ -77,14 +98,14 @@ export function mapProductToRow(p: Product) {
     rating: p.rating ?? 5.0,
     reviewsCount: p.reviewsCount ?? 0,
     category: p.category || 'wedding',
-    collections: Array.isArray(p.collections) ? p.collections : [],
+    collections: cleanCollections,
     images: Array.isArray(p.images) ? p.images : [],
     sizes: Array.isArray(p.sizes) ? p.sizes : ['S', 'M', 'L', 'XL'],
     colors: Array.isArray(p.colors) ? p.colors : ['White & Gold'],
     details: Array.isArray(p.details) ? p.details : [],
     inStock: Boolean(p.inStock),
     stockQuantity: p.stockQuantity !== undefined ? Number(p.stockQuantity) : 10,
-    isFeatured: Boolean(p.isFeatured) || isLive,
+    isFeatured: Boolean(p.isFeatured),
     isBestSeller: false,
     isNewArrival: Boolean(p.isNewArrival),
     isBespokeAvailable: p.isBespokeAvailable !== undefined ? Boolean(p.isBespokeAvailable) : true,
@@ -95,7 +116,7 @@ export function mapProductToRow(p: Product) {
     fabric: p.fabric || '',
     weaverRegion: p.weaverRegion || '',
     weavingDays: Number(p.weavingDays) || 10,
-    studioCategory: p.studioCategory || '',
+    studioCategory: cleanStudioCategory,
     updatedAt: new Date()
   };
 }

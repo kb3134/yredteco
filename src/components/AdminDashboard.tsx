@@ -425,9 +425,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   // Helper filter for Admin Products list (supports Studio vs Collection vs categories)
   const filterAdminProducts = (p: Product, filterId: string) => {
-    const isStudio = Boolean(p.studioCategory && p.studioCategory.trim() !== '') || 
-                    (p.collections && p.collections.includes('studio')) ||
-                    p.category === 'studio';
+    const isStudio = Boolean(p.collections && p.collections.includes('studio'));
     const isLiveshow = Boolean(p.collections && p.collections.includes('liveshow'));
     const isCollection = Boolean(p.collections && p.collections.includes('collection')) || (!isStudio && !isLiveshow);
 
@@ -437,6 +435,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     
     if (!filterId || filterId === 'all') return true;
 
+    if (!isCollection) return false;
     return isProductInCollection(p, filterId);
   };
 
@@ -470,6 +469,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [pNewImageUrl, setPNewImageUrl] = useState('');
   const [isUploadingProductImage, setIsUploadingProductImage] = useState(false);
   const [isSyncingAllImages, setIsSyncingAllImages] = useState(false);
+  const [syncResult, setSyncResult] = useState<{
+    liveshow: number;
+    collection: number;
+    studio: number;
+    failed: number;
+  } | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
 
   // Helper for reading file uploads with client-side canvas compression
@@ -536,11 +541,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleSyncAllCollectionImages = async () => {
     setIsSyncingAllImages(true);
+    setSyncResult(null);
     try {
       const res = await apiFetch('/api/storage/migrate-all', { method: 'POST' });
       const data = await res.json();
       if (data.success) {
         addToast('GitHub Cloud Sync Complete', `Synced ${data.migratedCount || 0} collection images to GitHub repository kb3134/yaredkb-ecommerce.`);
+        if (data.breakdown) {
+          setSyncResult(data.breakdown);
+        }
         if (editingProductId) {
           const updated = products.find(p => p.id === editingProductId);
           if (updated && updated.images) setPImages([...updated.images]);
@@ -566,9 +575,19 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const isStudioTarget = targetDestination === 'studio' || targetCategory === 'studio';
     const isLiveshowTarget = targetDestination === 'liveshow' || targetCategory === 'liveshow';
 
-    setDestCollection(true);
-    setDestLiveShow(isLiveshowTarget);
-    setDestStudio(isStudioTarget);
+    if (isStudioTarget) {
+      setDestStudio(true);
+      setDestCollection(false);
+      setDestLiveShow(false);
+    } else if (isLiveshowTarget) {
+      setDestStudio(false);
+      setDestCollection(false);
+      setDestLiveShow(true);
+    } else {
+      setDestStudio(false);
+      setDestCollection(true);
+      setDestLiveShow(false);
+    }
 
     const defaultStudio = studioCategories && studioCategories.length > 0 ? studioCategories[0].slug : 'traditional-dresses';
     setPStudioCategory(defaultStudio);
@@ -597,13 +616,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const openEditProductModal = (prod: Product) => {
     setEditingProductId(prod.id);
 
-    const isLive = Boolean(prod.collections && prod.collections.includes('liveshow')) || Boolean(prod.isFeatured);
-    const isStudio = Boolean(prod.studioCategory && prod.studioCategory.trim() !== '') || 
-                    Boolean(prod.collections && (prod.collections.includes('studio') || prod.collections.includes('studio-only'))) || 
-                    prod.category === 'studio';
-    const isCollection = Boolean(prod.collections && prod.collections.includes('collection')) || 
-                        (!isLive && !isStudio) || 
-                        Boolean(prod.collections && prod.collections.some(c => c !== 'liveshow' && c !== 'studio' && c !== 'studio-only'));
+    const isStudio = Boolean(prod.collections && prod.collections.includes('studio'));
+    const isLive = Boolean(prod.collections && prod.collections.includes('liveshow'));
+    const isCollection = !isStudio && !isLive;
 
     setDestCollection(isCollection);
     setDestLiveShow(isLive);
@@ -693,10 +708,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const isInStock = pStatus === 'In Stock' && Number(pStock) > 0;
 
     const finalCollectionsSet = new Set<string>();
-    if (pCategory) finalCollectionsSet.add(pCategory);
-    if (destCollection) finalCollectionsSet.add('collection');
-    if (destLiveShow) finalCollectionsSet.add('liveshow');
-    if (destStudio) finalCollectionsSet.add('studio');
+    if (destStudio) {
+      finalCollectionsSet.add('studio');
+      if (pCategory && pCategory !== 'collection' && pCategory !== 'liveshow') {
+        finalCollectionsSet.add(pCategory);
+      }
+    } else if (destLiveShow) {
+      finalCollectionsSet.add('liveshow');
+      if (pCategory && pCategory !== 'collection' && pCategory !== 'studio') {
+        finalCollectionsSet.add(pCategory);
+      }
+    } else {
+      finalCollectionsSet.add('collection');
+      if (pCategory && pCategory !== 'liveshow' && pCategory !== 'studio') {
+        finalCollectionsSet.add(pCategory);
+      }
+    }
 
     const finalStudioCategory = destStudio ? (pStudioCategory || pCategory || 'traditional-dresses') : '';
 
@@ -2585,13 +2612,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
             <form onSubmit={handleSaveProduct} className="space-y-4 text-xs">
               
-              {/* Target Upload Destination Switcher (Multi-Select) */}
+              {/* Target Upload Destination Switcher (Mutually Exclusive - Radio Mode) */}
               <div className="bg-[#FAF6ED] p-3.5 rounded-2xl border border-[#D4AF37]/40 space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="font-serif font-bold text-xs text-[#231B15] uppercase tracking-wider flex items-center gap-1.5">
-                    <span>Target Upload Destinations</span>
+                    <span>Target Upload Destination</span>
                     <span className="text-[10px] text-[#B8860B] font-mono font-semibold">
-                      (Select one or multiple sections)
+                      (Select exactly one exclusive destination)
                     </span>
                   </label>
                 </div>
@@ -2600,8 +2627,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (destCollection && !destLiveShow && !destStudio) return;
-                      setDestCollection(!destCollection);
+                      setDestCollection(true);
+                      setDestLiveShow(false);
+                      setDestStudio(false);
                     }}
                     className={`p-3 rounded-xl text-xs font-serif font-bold transition flex flex-col items-start gap-1 cursor-pointer text-left border relative ${
                       destCollection
@@ -2614,8 +2642,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <FolderPlus className={`w-4 h-4 shrink-0 ${destCollection ? 'text-[#D4AF37]' : 'text-gray-400'}`} />
                         <span>1. Collection</span>
                       </div>
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${destCollection ? 'border-[#D4AF37] bg-[#D4AF37] text-[#181310]' : 'border-gray-300'}`}>
-                        {destCollection && <Check className="w-3 h-3 stroke-[3]" />}
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${destCollection ? 'border-[#D4AF37] bg-[#D4AF37] text-[#181310]' : 'border-gray-300'}`}>
+                        {destCollection && <div className="w-1.5 h-1.5 rounded-full bg-[#181310]" />}
                       </div>
                     </div>
                     <div className="text-[10px] font-sans font-normal opacity-80 leading-tight">
@@ -2627,10 +2655,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (destStudio && !destCollection && !destLiveShow) return;
-                      const next = !destStudio;
-                      setDestStudio(next);
-                      if (next && (!pStudioCategory || pStudioCategory === '')) {
+                      setDestCollection(false);
+                      setDestLiveShow(false);
+                      setDestStudio(true);
+                      if (!pStudioCategory || pStudioCategory === '') {
                         const defaultStudio = studioCategories && studioCategories.length > 0 ? studioCategories[0].slug : 'traditional-dresses';
                         setPStudioCategory(defaultStudio);
                       }
@@ -2646,8 +2674,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <Sparkles className={`w-4 h-4 shrink-0 ${destStudio ? 'text-[#D4AF37]' : 'text-gray-400'}`} />
                         <span>2. Studio</span>
                       </div>
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${destStudio ? 'border-[#D4AF37] bg-[#D4AF37] text-[#181310]' : 'border-gray-300'}`}>
-                        {destStudio && <Check className="w-3 h-3 stroke-[3]" />}
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${destStudio ? 'border-[#D4AF37] bg-[#D4AF37] text-[#181310]' : 'border-gray-300'}`}>
+                        {destStudio && <div className="w-1.5 h-1.5 rounded-full bg-[#181310]" />}
                       </div>
                     </div>
                     <div className="text-[10px] font-sans font-normal opacity-80 leading-tight">
@@ -2659,8 +2687,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      if (destLiveShow && !destCollection && !destStudio) return;
-                      setDestLiveShow(!destLiveShow);
+                      setDestCollection(false);
+                      setDestLiveShow(true);
+                      setDestStudio(false);
                     }}
                     className={`p-3 rounded-xl text-xs font-serif font-bold transition flex flex-col items-start gap-1 cursor-pointer text-left border relative ${
                       destLiveShow
@@ -2673,8 +2702,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         <Upload className={`w-4 h-4 shrink-0 ${destLiveShow ? 'text-[#181310]' : 'text-gray-400'}`} />
                         <span>3. Live Showcase</span>
                       </div>
-                      <div className={`w-4 h-4 rounded border flex items-center justify-center ${destLiveShow ? 'border-[#181310] bg-[#181310] text-[#D4AF37]' : 'border-gray-300'}`}>
-                        {destLiveShow && <Check className="w-3 h-3 stroke-[3]" />}
+                      <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${destLiveShow ? 'border-[#181310] bg-[#181310] text-[#D4AF37]' : 'border-gray-300'}`}>
+                        {destLiveShow && <div className="w-1.5 h-1.5 rounded-full bg-[#D4AF37]" />}
                       </div>
                     </div>
                     <div className="text-[10px] font-sans font-normal opacity-80 leading-tight">
@@ -2890,6 +2919,35 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span>{isSyncingAllImages ? 'Syncing Collection...' : 'Sync All Collection Images to GitHub'}</span>
                   </button>
                 </div>
+
+                {syncResult && (
+                  <div className="mt-3 p-4 bg-[#F0FDF4] border border-[#22C55E]/30 rounded-xl text-[#1E3A1E] text-xs">
+                    <div className="font-serif font-bold text-sm mb-2 flex items-center gap-1.5 text-[#15803d]">
+                      <span className="w-2 h-2 rounded-full bg-[#22C55E] animate-pulse"></span>
+                      Sync completed
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 font-sans font-semibold mt-1">
+                      <div className="bg-white/60 p-2 rounded-lg border border-[#22C55E]/10">
+                        <span className="text-gray-500 block font-normal text-[10px] uppercase">Live Show</span>
+                        <span className="text-[#15803d] text-sm font-bold">{syncResult.liveshow} images</span>
+                      </div>
+                      <div className="bg-white/60 p-2 rounded-lg border border-[#22C55E]/10">
+                        <span className="text-gray-500 block font-normal text-[10px] uppercase">Collection</span>
+                        <span className="text-[#15803d] text-sm font-bold">{syncResult.collection} images</span>
+                      </div>
+                      <div className="bg-white/60 p-2 rounded-lg border border-[#22C55E]/10">
+                        <span className="text-gray-500 block font-normal text-[10px] uppercase">Studio</span>
+                        <span className="text-[#15803d] text-sm font-bold">{syncResult.studio} images</span>
+                      </div>
+                      <div className="bg-white/60 p-2 rounded-lg border border-[#22C55E]/10">
+                        <span className="text-gray-500 block font-normal text-[10px] uppercase">Failed</span>
+                        <span className={`text-sm font-bold ${syncResult.failed > 0 ? 'text-red-600' : 'text-[#15803d]'}`}>
+                          {syncResult.failed}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* File Upload Button + Image URL input */}
                 <div className="flex flex-col sm:flex-row gap-2">

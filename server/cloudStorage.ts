@@ -242,6 +242,18 @@ export function getMimeType(filenameOrExt: string): string {
   }
 }
 
+export function getUrlExtension(url: string | any): string {
+  if (!url || typeof url !== 'string') return 'jpg';
+  try {
+    const urlWithoutQuery = url.split('?')[0];
+    const ext = urlWithoutQuery.split('.').pop();
+    if (ext && ext.length >= 2 && ext.length <= 4 && /^[a-zA-Z0-9]+$/.test(ext)) {
+      return ext.toLowerCase();
+    }
+  } catch {}
+  return 'jpg';
+}
+
 /**
  * Uploads a base64 data URI, buffer, or remote image to permanent cloud storage.
  */
@@ -253,6 +265,7 @@ export async function uploadImageToPermanentStorage(
     folder?: string;
     destination?: string;
     title?: string;
+    useExactFilename?: boolean;
   } = {}
 ): Promise<StoredImageResult> {
   const config = detectActiveStorageProvider();
@@ -266,7 +279,9 @@ export async function uploadImageToPermanentStorage(
   const timestamp = Date.now();
   const randomSuffix = crypto.randomBytes(3).toString('hex');
   const targetExtension = options.mimeType ? options.mimeType.split('/')[1] || 'jpg' : 'jpg';
-  const safeFilename = `${cleanTitle}-${timestamp}-${randomSuffix}.${targetExtension}`;
+  const safeFilename = options.useExactFilename && options.filename
+    ? options.filename
+    : `${cleanTitle}-${timestamp}-${randomSuffix}.${targetExtension}`;
 
   let buffer: Buffer;
   let finalMimeType = options.mimeType || 'image/jpeg';

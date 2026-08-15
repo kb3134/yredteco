@@ -41,9 +41,7 @@ export const StudioGalleryPage: React.FC<StudioGalleryPageProps> = ({
   const maxProductPriceInCurrency = useMemo(() => {
     if (!products || products.length === 0) return 100000;
     const studioProducts = products.filter(p => {
-      const pStudioCat = (p.studioCategory || '').toLowerCase().trim();
-      const isStudioCol = p.collections?.includes('studio') || p.category === 'studio';
-      return pStudioCat !== '' || isStudioCol;
+      return Boolean(p.collections?.includes('studio'));
     });
     if (studioProducts.length === 0) return 100000;
     const maxUSD = Math.max(...studioProducts.map(p => p.priceUSD || 0), 1000);
@@ -99,15 +97,14 @@ export const StudioGalleryPage: React.FC<StudioGalleryPageProps> = ({
       
       // Count only from products with studio indicators
       products.forEach(p => {
-        const pStudioCat = (p.studioCategory || '').toLowerCase().trim();
-        const isStudioCol = p.collections?.includes('studio') || p.category === 'studio';
+        const isStudioCol = Boolean(p.collections?.includes('studio'));
         
-        if (pStudioCat !== '' || isStudioCol) {
+        if (isStudioCol) {
           counts.all++;
           
           // For products, we match against studio categories
           studioCategories.forEach(cat => {
-            const targetCat = pStudioCat || p.category;
+            const targetCat = p.studioCategory || p.category;
             const target = targetCat.toLowerCase().replace(/['’\s-]/g, '');
             const catSlugNorm = cat.slug.toLowerCase().replace(/['’\s-]/g, '');
             const catNameNorm = cat.name.toLowerCase().replace(/['’\s-]/g, '');
@@ -128,9 +125,7 @@ export const StudioGalleryPage: React.FC<StudioGalleryPageProps> = ({
       
       // Only display products that are designated as Studio products
       const studioProducts = products.filter(p => {
-        const pStudioCat = (p.studioCategory || '').toLowerCase().trim();
-        const isStudioCol = p.collections?.includes('studio') || p.category === 'studio';
-        return pStudioCat !== '' || isStudioCol;
+        return Boolean(p.collections?.includes('studio'));
       });
 
       let results = studioProducts;

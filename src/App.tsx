@@ -591,9 +591,7 @@ export default function App() {
 
   // Filter & Sort Products Logic
   const filteredProducts = products.filter(p => {
-    const isStudio = Boolean(p.studioCategory && p.studioCategory.trim() !== '') || 
-                     (p.collections && (p.collections.includes('studio') || p.collections.includes('studio-only'))) ||
-                     p.category === 'studio';
+    const isStudio = Boolean(p.collections && p.collections.includes('studio'));
     const isLiveshow = Boolean(p.collections && p.collections.includes('liveshow'));
     const isCollection = Boolean(p.collections && p.collections.includes('collection')) || (!isStudio && !isLiveshow);
 
@@ -602,7 +600,7 @@ export default function App() {
     } else if (selectedCategory === 'liveshow') {
       if (!isLiveshow) return false;
     } else {
-      if (!isCollection && !isProductInCollection(p, selectedCategory)) return false;
+      if (!isCollection) return false;
       if (!isProductInCollection(p, selectedCategory)) {
         return false;
       }

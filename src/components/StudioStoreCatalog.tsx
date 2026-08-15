@@ -105,13 +105,11 @@ export const StudioStoreCatalog: React.FC<StudioStoreCatalogProps> = ({
   // Filter products strictly based on category and filters
   const filteredProducts = products.filter((product) => {
     // 0. Destination matching
-    const isStudio = product.category === 'studio' || 
-                     (product.collections && (product.collections.includes('studio') || product.collections.includes('studio-only'))) || 
-                     Boolean(product.studioCategory && product.studioCategory.trim() !== '');
+    const isStudio = Boolean(product.collections && product.collections.includes('studio'));
     const isLiveshow = Boolean(product.collections && product.collections.includes('liveshow'));
     const isCollection = Boolean(product.collections && product.collections.includes('collection')) || (!isStudio && !isLiveshow);
 
-    if (!isCollection && !isProductInCollection(product, selectedCategory)) return false;
+    if (!isCollection) return false;
 
     // 1. Category / Collection matching
     if (!isProductInCollection(product, selectedCategory)) {

@@ -22,11 +22,7 @@ export const RecentUploadsShowcase: React.FC<RecentUploadsShowcaseProps> = ({
 }) => {
   // Filter exclusively for Live Showcase products
   const liveshowProducts = products.filter(p => {
-    const isStudio = Boolean(p.studioCategory && p.studioCategory.trim() !== '') || 
-                     (p.collections && p.collections.includes('studio')) ||
-                     p.category === 'studio';
-    const isLiveshow = Boolean(p.collections && p.collections.includes('liveshow')) || Boolean(p.isFeatured);
-    return isLiveshow;
+    return Boolean(p.collections && p.collections.includes('liveshow'));
   });
   const recentProducts = liveshowProducts.slice(0, 4);
 
