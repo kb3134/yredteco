@@ -3,7 +3,7 @@ import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { Product } from '../src/types';
+import { Product, BrandingImages } from '../src/types';
 
 // Local disk fallback directories
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -869,7 +869,7 @@ export async function syncProductsJsonToGitHub(products: Product[]): Promise<voi
   }
 
   const putBody: any = {
-    message: `Sync products catalog JSON to GitHub repository (Size: ${products.length})`,
+    message: `Sync products catalog JSON to GitHub repository (Count: ${products.length})`,
     content: base64Content,
     branch: branch
   };
@@ -937,6 +937,224 @@ export async function fetchProductsJsonFromGitHub(): Promise<Product[] | null> {
     }
   } catch (err: any) {
     console.warn('[GitHub Sync] Products catalog file is not yet available on GitHub:', err.message);
+  }
+  return null;
+}
+
+/**
+ * Synchronizes the live branding images configuration to branding.json in GitHub repository.
+ */
+export async function syncBrandingJsonToGitHub(branding: BrandingImages): Promise<void> {
+  const config = detectActiveStorageProvider();
+  if (config.provider !== 'github') return;
+
+  const githubConfig = getGitHubConfig();
+  const token = githubConfig.token;
+  const owner = githubConfig.owner;
+  const repo = githubConfig.repo;
+  const branch = githubConfig.branch;
+
+  if (!token) return;
+
+  const repoPath = 'data/branding.json';
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${repoPath}`;
+  const content = JSON.stringify(branding, null, 2);
+  const base64Content = Buffer.from(content, 'utf-8').toString('base64');
+
+  let existingSha: string | undefined = undefined;
+  try {
+    const getRes = await fetch(`${apiUrl}?ref=${branch}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'E-Commerce-App'
+      }
+    });
+    if (getRes.ok) {
+      const fileData = await getRes.json() as any;
+      if (fileData && fileData.sha) {
+        existingSha = fileData.sha;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const putBody: any = {
+    message: 'Sync branding visuals JSON configuration to GitHub repository',
+    content: base64Content,
+    branch: branch
+  };
+  if (existingSha) {
+    putBody.sha = existingSha;
+  }
+
+  try {
+    const putRes = await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'E-Commerce-App'
+      },
+      body: JSON.stringify(putBody)
+    });
+
+    if (!putRes.ok) {
+      const errText = await putRes.text().catch(() => '');
+      console.error(`[GitHub Sync] Sync branding failed (${putRes.status}): ${errText.slice(0, 200)}`);
+    } else {
+      console.log(`[GitHub Sync] Successfully synchronized branding configuration to GitHub (${repoPath})`);
+    }
+  } catch (err: any) {
+    console.error('[GitHub Sync] Error syncing branding:', err.message);
+  }
+}
+
+/**
+ * Fetches the branding.json configuration directly from the GitHub repository.
+ */
+export async function fetchBrandingJsonFromGitHub(): Promise<BrandingImages | null> {
+  const config = detectActiveStorageProvider();
+  if (config.provider !== 'github') return null;
+
+  const githubConfig = getGitHubConfig();
+  const token = githubConfig.token;
+  const owner = githubConfig.owner;
+  const repo = githubConfig.repo;
+  const branch = githubConfig.branch;
+
+  if (!token) return null;
+
+  const repoPath = 'data/branding.json';
+  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${repoPath}`;
+
+  try {
+    const res = await fetch(rawUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+raw',
+        'User-Agent': 'E-Commerce-App'
+      }
+    });
+
+    if (res.ok) {
+      const text = await res.text();
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        console.log(`[GitHub Sync] Successfully fetched branding visuals directly from GitHub repository!`);
+        return parsed as BrandingImages;
+      }
+    }
+  } catch (err: any) {
+    console.warn('[GitHub Sync] Branding config file not yet available on GitHub:', err.message);
+  }
+  return null;
+}
+
+/**
+ * Synchronizes full application db.json state (orders, studio images, etc.) to GitHub.
+ */
+export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
+  const config = detectActiveStorageProvider();
+  if (config.provider !== 'github') return;
+
+  const githubConfig = getGitHubConfig();
+  const token = githubConfig.token;
+  const owner = githubConfig.owner;
+  const repo = githubConfig.repo;
+  const branch = githubConfig.branch;
+
+  if (!token) return;
+
+  const repoPath = 'data/db.json';
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${repoPath}`;
+  const content = JSON.stringify(dbState, null, 2);
+  const base64Content = Buffer.from(content, 'utf-8').toString('base64');
+
+  let existingSha: string | undefined = undefined;
+  try {
+    const getRes = await fetch(`${apiUrl}?ref=${branch}`, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'User-Agent': 'E-Commerce-App'
+      }
+    });
+    if (getRes.ok) {
+      const fileData = await getRes.json() as any;
+      if (fileData && fileData.sha) {
+        existingSha = fileData.sha;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  const putBody: any = {
+    message: 'Sync application database state to GitHub repository',
+    content: base64Content,
+    branch: branch
+  };
+  if (existingSha) {
+    putBody.sha = existingSha;
+  }
+
+  try {
+    await fetch(apiUrl, {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'E-Commerce-App'
+      },
+      body: JSON.stringify(putBody)
+    });
+    console.log(`[GitHub Sync] Successfully synchronized full database to GitHub (${repoPath})`);
+  } catch (err: any) {
+    console.error('[GitHub Sync] Error syncing full db state:', err.message);
+  }
+}
+
+/**
+ * Fetches the full db.json database state from GitHub.
+ */
+export async function fetchDatabaseJsonFromGitHub(): Promise<any | null> {
+  const config = detectActiveStorageProvider();
+  if (config.provider !== 'github') return null;
+
+  const githubConfig = getGitHubConfig();
+  const token = githubConfig.token;
+  const owner = githubConfig.owner;
+  const repo = githubConfig.repo;
+  const branch = githubConfig.branch;
+
+  if (!token) return null;
+
+  const repoPath = 'data/db.json';
+  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${repoPath}`;
+
+  try {
+    const res = await fetch(rawUrl, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/vnd.github+raw',
+        'User-Agent': 'E-Commerce-App'
+      }
+    });
+
+    if (res.ok) {
+      const text = await res.text();
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        console.log(`[GitHub Sync] Successfully fetched application database state directly from GitHub!`);
+        return parsed;
+      }
+    }
+  } catch (err: any) {
+    console.warn('[GitHub Sync] Database state not yet available on GitHub:', err.message);
   }
   return null;
 }

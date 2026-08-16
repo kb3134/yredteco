@@ -534,7 +534,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         aboutUsUrl: bAboutUsUrl,
         craftsmanshipUrl: bCraftsmanshipUrl,
         promotionalBannerUrl: bPromotionalBannerUrl,
-        lookbookUrls: bLookbookUrls
+        lookbookUrls: bLookbookUrls,
+        
+        heroBannerBadge: bHeroBannerBadge,
+        heroBannerTitle: bHeroBannerTitle,
+        heroBannerSubtitle: bHeroBannerSubtitle,
+        
+        heroSecondaryBadge: bHeroSecondaryBadge,
+        heroSecondaryTitle: bHeroSecondaryTitle,
+        heroSecondarySubtitle: bHeroSecondarySubtitle,
+        
+        heroTertiaryBadge: bHeroTertiaryBadge,
+        heroTertiaryTitle: bHeroTertiaryTitle,
+        heroTertiarySubtitle: bHeroTertiarySubtitle,
+
+        socialLinks: {
+          facebook: bFacebookUrl,
+          instagram: bInstagramUrl,
+          tiktok: bTiktokUrl,
+          telegram: bTelegramUrl
+        }
       });
     }
   };

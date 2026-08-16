@@ -43,7 +43,11 @@ import {
   StoredImageResult,
   getUrlExtension,
   syncProductsJsonToGitHub,
-  fetchProductsJsonFromGitHub
+  fetchProductsJsonFromGitHub,
+  syncBrandingJsonToGitHub,
+  fetchBrandingJsonFromGitHub,
+  syncDatabaseJsonToGitHub,
+  fetchDatabaseJsonFromGitHub
 } from './server/cloudStorage';
 
 const app = express();
@@ -87,6 +91,7 @@ const DATA_DIR = path.join(process.cwd(), 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
 const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
+const BRANDING_FILE = path.join(DATA_DIR, 'branding.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -643,8 +648,18 @@ async function cleanupOrphanedImageAsync(url: string): Promise<void> {
   // Never delete Unsplash stock photos
   if (url.includes('images.unsplash.com')) return;
   
-  // Never delete default brand seed assets
-  const isProtectedDefault = url.includes('brand-logo') || url.includes('brand-favicon') || url.includes('hero-primary.jpg');
+  // Never delete default brand seed assets and embedded assets
+  const isProtectedDefault = 
+    url.includes('brand-') || 
+    url.includes('hero-') || 
+    url.includes('about-us') ||
+    url.includes('craftsmanship') ||
+    url.includes('promotional-banner') ||
+    url.includes('lookbook-') ||
+    url.includes('yared_official_logo') ||
+    url.includes('yared_shield_logo') ||
+    url.includes('ethiopian_') ||
+    url.includes('/src/assets/images/');
   if (isProtectedDefault) return;
 
   const recIndex = uploadedImagesDb.findIndex(r => r.url === url);
@@ -1012,7 +1027,21 @@ let currencyRatesDb = { ...CURRENCY_RATES };
 async function loadDatabaseAsync(): Promise<void> {
   initDefaultBrandImages();
 
-  // Load products from local backup products.json file if available as first fallback
+  // 1. Load branding from local backup branding.json if available
+  if (fs.existsSync(BRANDING_FILE)) {
+    try {
+      const rawBranding = fs.readFileSync(BRANDING_FILE, 'utf-8');
+      const parsed = JSON.parse(rawBranding);
+      if (parsed && typeof parsed === 'object') {
+        brandingDb = sanitizeBrandingImages(parsed);
+        console.log('[Database] Loaded branding visuals from local branding.json backup.');
+      }
+    } catch (e) {
+      console.error('[Database] Error loading local branding.json backup:', e);
+    }
+  }
+
+  // 2. Load products from local backup products.json file if available as first fallback
   if (fs.existsSync(PRODUCTS_FILE)) {
     try {
       const rawProducts = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
@@ -1026,19 +1055,7 @@ async function loadDatabaseAsync(): Promise<void> {
     }
   }
 
-  // Fetch products from GitHub directly if active
-  try {
-    const gitProducts = await fetchProductsJsonFromGitHub();
-    if (gitProducts && gitProducts.length > 0) {
-      productsDb = gitProducts;
-      fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(productsDb, null, 2), 'utf-8');
-      console.log(`[Database] Restored ${productsDb.length} products directly from GitHub repository backup.`);
-    }
-  } catch (err: any) {
-    console.warn('[Database] GitHub products fetch note:', err.message);
-  }
-
-  // 1. Load non-product configuration state from local db.json if available
+  // 3. Load full state from local db.json if available
   if (fs.existsSync(DB_FILE)) {
     try {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -1059,7 +1076,39 @@ async function loadDatabaseAsync(): Promise<void> {
     }
   }
 
-  // 2. Query Cloud SQL PostgreSQL as primary source of truth for products & persistent state
+  // 4. Fetch persistent state directly from GitHub repository if active
+  try {
+    const gitBranding = await fetchBrandingJsonFromGitHub();
+    if (gitBranding && typeof gitBranding === 'object') {
+      brandingDb = sanitizeBrandingImages(gitBranding);
+      fs.writeFileSync(BRANDING_FILE, JSON.stringify(brandingDb, null, 2), 'utf-8');
+      console.log('[Database] Restored live branding visuals directly from GitHub repository backup.');
+    }
+
+    const gitProducts = await fetchProductsJsonFromGitHub();
+    if (gitProducts && gitProducts.length > 0) {
+      productsDb = gitProducts;
+      fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(productsDb, null, 2), 'utf-8');
+      console.log(`[Database] Restored ${productsDb.length} products directly from GitHub repository backup.`);
+    }
+
+    const gitDb = await fetchDatabaseJsonFromGitHub();
+    if (gitDb && typeof gitDb === 'object') {
+      if (gitDb.studioCategories && studioCategoriesDb.length <= DEFAULT_STUDIO_CATEGORIES.length) {
+        studioCategoriesDb = gitDb.studioCategories;
+      }
+      if (gitDb.studioImages && (!studioImagesDb || studioImagesDb.length === 0)) {
+        studioImagesDb = gitDb.studioImages;
+      }
+      if (gitDb.orders && (!ordersDb || ordersDb.length === 0)) {
+        ordersDb = gitDb.orders;
+      }
+    }
+  } catch (err: any) {
+    console.warn('[Database] GitHub restore note:', err.message);
+  }
+
+  // 5. Query Cloud SQL PostgreSQL as primary source of truth for products & persistent state
   if (!isDatabaseConfigured()) {
     console.log('[Database] PostgreSQL connection is not configured. Running in offline/local storage mode.');
     saveDatabase();
@@ -1144,6 +1193,16 @@ async function loadDatabaseAsync(): Promise<void> {
 function loadDatabase(): void {
   initDefaultBrandImages();
 
+  if (fs.existsSync(BRANDING_FILE)) {
+    try {
+      const rawBranding = fs.readFileSync(BRANDING_FILE, 'utf-8');
+      const parsed = JSON.parse(rawBranding);
+      if (parsed && typeof parsed === 'object') {
+        brandingDb = sanitizeBrandingImages(parsed);
+      }
+    } catch {}
+  }
+
   // Load products from local backup products.json if available
   if (fs.existsSync(PRODUCTS_FILE)) {
     try {
@@ -1203,11 +1262,20 @@ function saveDatabase(): void {
     // Save products to local products.json file backup
     fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(productsDb, null, 2), 'utf-8');
 
+    // Save branding to local branding.json file backup
+    fs.writeFileSync(BRANDING_FILE, JSON.stringify(brandingDb, null, 2), 'utf-8');
+
     // Trigger GitHub background sync if configured
     const activeProvider = detectActiveStorageProvider();
     if (activeProvider.provider === 'github') {
       syncProductsJsonToGitHub(productsDb).catch(err => {
         console.error('[GitHub Sync] Error syncing products to GitHub:', err.message);
+      });
+      syncBrandingJsonToGitHub(brandingDb).catch(err => {
+        console.error('[GitHub Sync] Error syncing branding to GitHub:', err.message);
+      });
+      syncDatabaseJsonToGitHub(payload).catch(err => {
+        console.error('[GitHub Sync] Error syncing database to GitHub:', err.message);
       });
     }
   } catch (e) {
@@ -1227,19 +1295,47 @@ app.get(['/api/uploads/:filename', '/uploads/:filename'], (req, res) => {
   const filename = path.basename(req.params.filename);
   const filePath = path.join(UPLOADS_DIR, filename);
 
-  if (!fs.existsSync(filePath)) {
-    const srcPath = path.join(process.cwd(), 'src', 'assets', 'images', filename);
-    if (fs.existsSync(srcPath)) {
-      res.setHeader('Access-Control-Allow-Origin', '*');
-      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-      return res.sendFile(srcPath);
-    }
-    return res.status(404).send('Image file not found');
+  if (fs.existsSync(filePath)) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.sendFile(filePath);
   }
 
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-  return res.sendFile(filePath);
+  // Fallback 1: Direct file in src/assets/images
+  const srcPath = path.join(process.cwd(), 'src', 'assets', 'images', filename);
+  if (fs.existsSync(srcPath)) {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return res.sendFile(srcPath);
+  }
+
+  // Fallback 2: Map well-known aliases to high-res bundled assets
+  const defaultAssetMap: Record<string, string> = {
+    'brand-logo.jpg': 'yared_official_logo_1786147555847.jpg',
+    'brand-favicon.png': 'yared_official_logo_1786147555847.jpg',
+    'hero-primary.jpg': 'ethiopian_luxury_hero_1785390172994.jpg',
+    'hero-secondary.jpg': 'ethiopian_couture_campaign_1785390186014.jpg',
+    'hero-tertiary.jpg': 'ethiopian_habesha_kemis_1785527313511.jpg',
+    'about-us.jpg': 'ethiopian_habesha_kemis_1785527313511.jpg',
+    'craftsmanship.jpg': 'ethiopian_mens_attire_1785527326767.jpg',
+    'promotional-banner.jpg': 'ethiopian_bridal_couture_1785527342813.jpg',
+    'lookbook-1.jpg': 'ethiopian_luxury_hero_1785390172994.jpg',
+    'lookbook-2.jpg': 'ethiopian_couture_campaign_1785390186014.jpg',
+    'lookbook-3.jpg': 'ethiopian_habesha_kemis_1785527313511.jpg',
+    'lookbook-4.jpg': 'ethiopian_bridal_couture_1785527342813.jpg',
+  };
+
+  const mappedName = defaultAssetMap[filename];
+  if (mappedName) {
+    const mappedSrcPath = path.join(process.cwd(), 'src', 'assets', 'images', mappedName);
+    if (fs.existsSync(mappedSrcPath)) {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return res.sendFile(mappedSrcPath);
+    }
+  }
+
+  return res.status(404).send('Image file not found');
 });
 
 // ==================== DATABASE IMAGE STORE & MEDIA API ==================== //
@@ -2201,6 +2297,7 @@ app.post('/api/products', async (req, res) => {
   }
 
   productsDb.unshift(newProduct);
+  saveDatabase();
   res.status(201).json({ message: 'Product created successfully', product: newProduct });
 });
 
@@ -2312,6 +2409,7 @@ app.put('/api/products/:id', async (req, res) => {
     productsDb.unshift(updated);
   }
 
+  saveDatabase();
   res.json({ message: 'Product updated', product: updated });
 });
 
@@ -2334,6 +2432,7 @@ app.delete('/api/products/:id', async (req, res) => {
   }
 
   productsDb = productsDb.filter(p => p.id !== req.params.id);
+  saveDatabase();
   res.json({ message: 'Product deleted' });
 });
 
