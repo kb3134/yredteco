@@ -41,7 +41,9 @@ import {
   saveGitHubConfig,
   StorageConfigInfo,
   StoredImageResult,
-  getUrlExtension
+  getUrlExtension,
+  syncProductsJsonToGitHub,
+  fetchProductsJsonFromGitHub
 } from './server/cloudStorage';
 
 const app = express();
@@ -84,6 +86,7 @@ const ADMIN_SESSION_TTL_MS = 1000 * 60 * 60 * 8; // 8 hours
 const DATA_DIR = path.join(process.cwd(), 'data');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 const DB_FILE = path.join(DATA_DIR, 'db.json');
+const PRODUCTS_FILE = path.join(DATA_DIR, 'products.json');
 
 if (!fs.existsSync(DATA_DIR)) {
   fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -311,26 +314,33 @@ async function processAndSaveImageAsync(
 
   const activeProvider = detectActiveStorageProvider();
 
-  // If destination is one of collection, studio, liveshow, format GitHub folder path correctly
-  const targetFolder = (activeProvider.provider === 'github' && ['collection', 'studio', 'liveshow'].includes(destination))
+  // If destination is one of collection, studio, liveshow, branding, format GitHub folder path correctly
+  const targetFolder = (activeProvider.provider === 'github' && ['collection', 'studio', 'liveshow', 'branding'].includes(destination))
     ? `images/${destination}`
     : (destination || 'general');
 
-  // Compute a stable, unique filename for products if requested or if it's a product image
+  // Compute a stable, unique filename for products or branding if requested
   let computedStableFilename = stableFilename;
   const isProductImage = ['collection', 'studio', 'liveshow'].includes(destination) && associatedId;
-  if (!computedStableFilename && isProductImage) {
-    let imgIndex = '1';
-    const match = prefix.match(/-(\d+)$/);
-    if (match) {
-      imgIndex = match[1];
+  const isBrandingImage = destination === 'branding';
+
+  if (!computedStableFilename) {
+    if (isProductImage) {
+      let imgIndex = '1';
+      const match = prefix.match(/-(\d+)$/);
+      if (match) {
+        imgIndex = match[1];
+      }
+      const ext = getUrlExtension(trimmed);
+      computedStableFilename = `product-${associatedId}-${imgIndex}.${ext}`;
+    } else if (isBrandingImage && prefix) {
+      const ext = getUrlExtension(trimmed);
+      computedStableFilename = `${prefix}.${ext}`;
     }
-    const ext = getUrlExtension(trimmed);
-    computedStableFilename = `product-${associatedId}-${imgIndex}.${ext}`;
   }
 
   // If already a permanent cloud URL on the active cloud provider
-  const hasCorrectFolder = activeProvider.provider === 'github' && ['collection', 'studio', 'liveshow'].includes(destination)
+  const hasCorrectFolder = activeProvider.provider === 'github' && ['collection', 'studio', 'liveshow', 'branding'].includes(destination)
     ? trimmed.includes(`images/${destination}/`)
     : true;
 
@@ -1002,6 +1012,32 @@ let currencyRatesDb = { ...CURRENCY_RATES };
 async function loadDatabaseAsync(): Promise<void> {
   initDefaultBrandImages();
 
+  // Load products from local backup products.json file if available as first fallback
+  if (fs.existsSync(PRODUCTS_FILE)) {
+    try {
+      const rawProducts = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
+      const parsed = JSON.parse(rawProducts);
+      if (Array.isArray(parsed)) {
+        productsDb = parsed;
+        console.log(`[Database] Loaded ${productsDb.length} products from local products.json backup.`);
+      }
+    } catch (e) {
+      console.error('[Database] Error loading local products.json backup:', e);
+    }
+  }
+
+  // Fetch products from GitHub directly if active
+  try {
+    const gitProducts = await fetchProductsJsonFromGitHub();
+    if (gitProducts && gitProducts.length > 0) {
+      productsDb = gitProducts;
+      fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(productsDb, null, 2), 'utf-8');
+      console.log(`[Database] Restored ${productsDb.length} products directly from GitHub repository backup.`);
+    }
+  } catch (err: any) {
+    console.warn('[Database] GitHub products fetch note:', err.message);
+  }
+
   // 1. Load non-product configuration state from local db.json if available
   if (fs.existsSync(DB_FILE)) {
     try {
@@ -1032,9 +1068,17 @@ async function loadDatabaseAsync(): Promise<void> {
 
   try {
     const sqlProducts = await getSqlProducts();
-    if (sqlProducts) {
+    if (sqlProducts && sqlProducts.length > 0) {
       productsDb = sqlProducts;
       console.log(`[Cloud SQL] Loaded ${sqlProducts.length} persistent products from PostgreSQL database.`);
+    } else if (productsDb.length > 0) {
+      // Seed PostgreSQL with products loaded from JSON backup/GitHub
+      console.log(`[Cloud SQL] Seeding PostgreSQL with ${productsDb.length} products from JSON/GitHub backup...`);
+      for (const p of productsDb) {
+        await upsertSqlProduct(p).catch((err) => {
+          console.error(`[Cloud SQL] Failed to seed product ${p.id}:`, err.message);
+        });
+      }
     }
 
     const sqlStudioCategories = await getSqlStudioCategories();
@@ -1100,6 +1144,20 @@ async function loadDatabaseAsync(): Promise<void> {
 function loadDatabase(): void {
   initDefaultBrandImages();
 
+  // Load products from local backup products.json if available
+  if (fs.existsSync(PRODUCTS_FILE)) {
+    try {
+      const rawProducts = fs.readFileSync(PRODUCTS_FILE, 'utf-8');
+      const parsed = JSON.parse(rawProducts);
+      if (Array.isArray(parsed)) {
+        productsDb = parsed;
+        console.log(`[Database] Loaded ${productsDb.length} products from local products.json backup on synchronous load.`);
+      }
+    } catch (e) {
+      console.error('[Database] Error loading local products.json in synchronous load:', e);
+    }
+  }
+
   if (fs.existsSync(DB_FILE)) {
     try {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
@@ -1141,8 +1199,19 @@ function saveDatabase(): void {
       uploadedImages: uploadedImagesDb
     };
     fs.writeFileSync(DB_FILE, JSON.stringify(payload, null, 2), 'utf-8');
+    
+    // Save products to local products.json file backup
+    fs.writeFileSync(PRODUCTS_FILE, JSON.stringify(productsDb, null, 2), 'utf-8');
+
+    // Trigger GitHub background sync if configured
+    const activeProvider = detectActiveStorageProvider();
+    if (activeProvider.provider === 'github') {
+      syncProductsJsonToGitHub(productsDb).catch(err => {
+        console.error('[GitHub Sync] Error syncing products to GitHub:', err.message);
+      });
+    }
   } catch (e) {
-    console.error('[Database] Failed to save to db.json:', e);
+    console.error('[Database] Failed to save database:', e);
   }
 }
 

@@ -54,7 +54,6 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({
     { id: 'family', label: 'FAMILY' },
     { id: 'baby', label: 'BABY' },
     { id: 'formal', label: 'FORMAL' },
-    { id: 'studio', label: 'STUDIO ATELIER' },
   ];
 
   const availableSizes = ['all', 'S', 'M', 'L', 'XL', 'XXL', 'Custom Fit'];
