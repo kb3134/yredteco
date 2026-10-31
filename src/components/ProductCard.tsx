@@ -22,7 +22,8 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 }) => {
   const [activeImageIndex, setActiveImageIndex] = useState(0);
   const [addedAnimation, setAddedAnimation] = useState(false);
-  const selectedSize = product.sizes[0] || 'Standard';
+  const selectedSize = (product.sizes && product.sizes.length > 0) ? product.sizes[0] : 'Standard';
+  const defaultColor = (product.colors && product.colors.length > 0) ? product.colors[0] : 'Original';
 
   // Convert price from USD to active currency rate
   const rateObj = CURRENCY_RATES[currency] || { code: 'ETB' as any, symbol: 'ETB ', rateToUSD: 1 };
@@ -36,7 +37,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
 
   const handleQuickAdd = (e: React.MouseEvent) => {
     e.stopPropagation();
-    onAddToCart(product, selectedSize, product.colors[0] || 'Original');
+    onAddToCart(product, selectedSize, defaultColor);
     setAddedAnimation(true);
     setTimeout(() => setAddedAnimation(false), 1200);
   };
@@ -88,12 +89,15 @@ export const ProductCard: React.FC<ProductCardProps> = ({
       {/* Product Image Frame with Hover Quick View */}
       <div className="relative aspect-[3/4] overflow-hidden bg-[#241C16]">
         <img
-          src={product.images[activeImageIndex] || product.images[0]}
+          src={product.images && product.images.length > 0 ? (product.images[activeImageIndex] || product.images[0]) : '/api/uploads/hero-primary.jpg'}
           alt={product.name}
           referrerPolicy="no-referrer"
           className="w-full h-full object-cover object-top group-hover:scale-105 transition-transform duration-700"
+          onError={(e) => {
+            (e.currentTarget as HTMLImageElement).src = '/api/uploads/hero-primary.jpg';
+          }}
           onMouseEnter={() => {
-            if (product.images.length > 1) setActiveImageIndex(1);
+            if (product.images && product.images.length > 1) setActiveImageIndex(1);
           }}
           onMouseLeave={() => setActiveImageIndex(0)}
         />
@@ -144,7 +148,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             <div>
               <div className="text-[10px] uppercase font-serif tracking-widest text-gray-400">Price</div>
               <div className="font-serif font-bold text-lg text-[#D4AF37]">
-                {convertedPrice.toLocaleString()} <span className="text-xs font-normal text-gray-300">{rateObj.symbol}</span>
+                ETB {convertedPrice.toLocaleString()}
               </div>
             </div>
 

@@ -30,6 +30,7 @@ import { TestimonialsSection } from './components/TestimonialsSection';
 import { ContactUsPage } from './components/ContactUsPage';
 import { FloatingSocialBar } from './components/FloatingSocialBar';
 import { CartDrawer } from './components/CartDrawer';
+import { WishlistDrawer } from './components/WishlistDrawer';
 import { CheckoutView } from './components/CheckoutView';
 import { OrderConfirmationModal } from './components/OrderConfirmationModal';
 import { AdminDashboard } from './components/AdminDashboard';
@@ -42,6 +43,7 @@ import { StudioGalleryPage } from './components/StudioGalleryPage';
 import { Pagination } from './components/Pagination';
 import { HomeImageUploaderModal } from './components/HomeImageUploaderModal';
 import { RecentUploadsShowcase } from './components/RecentUploadsShowcase';
+import { BespokeView } from './components/BespokeView';
 
 export default function App() {
   // Navigation & View State
@@ -73,10 +75,27 @@ export default function App() {
 
   // Cart & Wishlist State
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
-  const [wishlistProductIds, setWishlistProductIds] = useState<string[]>([]);
+  const [wishlistProductIds, setWishlistProductIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('yared_wishlist_ids');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
 
-  // Modals State
+  // Save wishlist to localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('yared_wishlist_ids', JSON.stringify(wishlistProductIds));
+    } catch {
+      // ignore
+    }
+  }, [wishlistProductIds]);
+
+  // Modals & Drawers State
   const [isCartDrawerOpen, setIsCartDrawerOpen] = useState(false);
+  const [isWishlistDrawerOpen, setIsWishlistDrawerOpen] = useState(false);
   const [isHomeUploadModalOpen, setIsHomeUploadModalOpen] = useState(false);
   const [quickViewProduct, setQuickViewProduct] = useState<Product | null>(null);
   const [confirmedOrder, setConfirmedOrder] = useState<Order | null>(null);
@@ -917,11 +936,7 @@ export default function App() {
         cartCount={cartItems.reduce((acc, item) => acc + item.quantity, 0)}
         wishlistCount={wishlistProductIds.length}
         onOpenCart={() => setIsCartDrawerOpen(true)}
-        onOpenWishlist={() => {
-          setSelectedCategory('all');
-          setSearchQuery('');
-          setActiveTab('collections');
-        }}
+        onOpenWishlist={() => setIsWishlistDrawerOpen(true)}
         activeTab={activeTab}
         setActiveTab={setActiveTab}
         searchQuery={searchQuery}
@@ -1202,7 +1217,67 @@ export default function App() {
 
               <ContactUsPage onSubmitContactMessage={handleSubmitContactMessage} />
             </motion.div>
-          ) : null}
+          ) : activeTab === 'bespoke' ? (
+            /* Dedicated Bespoke Commissioning & Fitting View (Slide) */
+            <motion.div
+              key="bespoke-view"
+              initial={{ x: '100%', opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: '-100%', opacity: 0 }}
+              transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+              className="w-full text-[#1A1817]"
+            >
+              <BespokeView
+                targetProduct={bespokeTargetProduct}
+                onSubmitBespoke={handleSubmitBespoke}
+                onBackToHome={() => {
+                  setBespokeTargetProduct(null);
+                  setActiveTab('home');
+                }}
+                onExploreCollections={() => {
+                  setBespokeTargetProduct(null);
+                  setActiveTab('collections');
+                }}
+              />
+            </motion.div>
+          ) : (
+            /* Fallback to Home */
+            <motion.div
+              key="fallback-home"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="w-full"
+            >
+              <HeroBanner
+                heroBannerUrl={brandingImages.heroBannerUrl}
+                heroSecondaryUrl={brandingImages.heroSecondaryUrl}
+                heroTertiaryUrl={brandingImages.heroTertiaryUrl}
+                heroBannerBadge={brandingImages.heroBannerBadge}
+                heroBannerTitle={brandingImages.heroBannerTitle}
+                heroBannerSubtitle={brandingImages.heroBannerSubtitle}
+                heroSecondaryBadge={brandingImages.heroSecondaryBadge}
+                heroSecondaryTitle={brandingImages.heroSecondaryTitle}
+                heroSecondarySubtitle={brandingImages.heroSecondarySubtitle}
+                heroTertiaryBadge={brandingImages.heroTertiaryBadge}
+                heroTertiaryTitle={brandingImages.heroTertiaryTitle}
+                heroTertiarySubtitle={brandingImages.heroTertiarySubtitle}
+                onExploreCollections={() => setActiveTab('collections')}
+                onBookBespoke={() => setActiveTab('bespoke')}
+                onOpenUploadModal={() => setIsHomeUploadModalOpen(true)}
+              />
+              <AboutUsSection aboutUsUrl={brandingImages.aboutUsUrl} socialLinks={brandingImages.socialLinks} />
+              <RecentUploadsShowcase
+                products={products}
+                currency={currency}
+                onQuickView={setQuickViewProduct}
+                onAddToCart={handleAddToCart}
+                isWishlisted={(id) => wishlistProductIds.includes(id)}
+                onToggleWishlist={handleToggleWishlist}
+              />
+              <TestimonialsSection />
+            </motion.div>
+          )}
         </AnimatePresence>
       </main>
 
@@ -1247,14 +1322,38 @@ export default function App() {
         onGoToCheckout={() => setActiveTab('checkout')}
       />
 
-      <OrderConfirmationModal
-        order={confirmedOrder}
-        onClose={() => setConfirmedOrder(null)}
-        onContinueShopping={() => {
-          setConfirmedOrder(null);
-          setActiveTab('home');
+      <WishlistDrawer
+        isOpen={isWishlistDrawerOpen}
+        onClose={() => setIsWishlistDrawerOpen(false)}
+        wishlistProductIds={wishlistProductIds}
+        products={products}
+        currency={currency}
+        onToggleWishlist={handleToggleWishlist}
+        onClearWishlist={() => {
+          setWishlistProductIds([]);
+          addToast('Wishlist Cleared', 'All saved couture pieces have been removed.');
         }}
+        onAddToCart={handleAddToCart}
+        onQuickView={(p) => setQuickViewProduct(p)}
+        onExploreCollections={() => {
+          setSelectedCategory('all');
+          setSearchQuery('');
+          setActiveTab('collections');
+        }}
+        onOpenCart={() => setIsCartDrawerOpen(true)}
       />
+
+      {/* OrderConfirmationModal: show only if order is placed from quick drawer or outside dedicated checkout page */}
+      {activeTab !== 'checkout' && (
+        <OrderConfirmationModal
+          order={confirmedOrder}
+          onClose={() => setConfirmedOrder(null)}
+          onContinueShopping={() => {
+            setConfirmedOrder(null);
+            setActiveTab('home');
+          }}
+        />
+      )}
 
       <Toast toasts={toasts} onDismiss={removeToast} />
 

@@ -207,6 +207,14 @@ export const HeroBanner: React.FC<HeroBannerProps> = ({
                 <span>SHOP COLLECTION</span>
                 <ArrowRight className="w-4 h-4 text-[#D4AF37] group-hover:translate-x-1 transition-transform" />
               </button>
+
+              <button
+                onClick={onBookBespoke}
+                className="w-full sm:w-auto px-7 py-4 bg-white text-[#211B17] hover:bg-amber-50 transition-all font-serif font-bold text-xs tracking-widest uppercase flex items-center justify-center gap-2 shadow-sm cursor-pointer border border-[#C5A059]/60"
+              >
+                <Sparkles className="w-4 h-4 text-[#B88E28]" />
+                <span>COMMISSION BESPOKE</span>
+              </button>
             </div>
 
           </div>

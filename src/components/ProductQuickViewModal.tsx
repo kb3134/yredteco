@@ -121,10 +121,13 @@ export const ProductQuickViewModal: React.FC<ProductQuickViewModalProps> = ({
           
           <div className="w-full relative flex-1 flex items-center justify-center">
             <img
-              src={product.images[selectedImageIndex] || product.images[0]}
+              src={(product.images && product.images.length > 0) ? (product.images[selectedImageIndex] || product.images[0]) : '/api/uploads/hero-primary.jpg'}
               alt={product.name}
               referrerPolicy="no-referrer"
               className="w-full h-[350px] sm:h-[420px] md:h-[480px] object-cover object-top transition-all duration-300"
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).src = '/api/uploads/hero-primary.jpg';
+              }}
             />
 
             {/* Image counter if multiple images exist */}
@@ -327,6 +330,18 @@ export const ProductQuickViewModal: React.FC<ProductQuickViewModalProps> = ({
                       className="p-2 border border-[#D5CEBF] bg-white rounded-xs text-xs focus:outline-none focus:border-[#C5A059]"
                     />
                   </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onClose();
+                      onOpenBespokeForm(product);
+                    }}
+                    className="w-full mt-2 py-2 px-3 bg-[#1F1510] text-[#D4AF37] hover:bg-black font-serif text-[11px] font-bold uppercase tracking-wider rounded-xs transition flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    <span>Open Full Loom Commission Page &rarr;</span>
+                  </button>
                 </div>
               )}
             </div>

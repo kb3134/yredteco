@@ -50,6 +50,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<'TeleBirr' | 'CBE Birr' | 'Cash on Delivery' | 'Bank Transfer'>('TeleBirr');
 
   // Validation & Loading State
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -79,18 +80,22 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       newErrors.email = 'Please enter a valid email address';
     }
     setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
+    const keys = Object.keys(newErrors);
+    return {
+      isValid: keys.length === 0,
+      firstErrorKey: keys[0]
+    };
   };
 
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     if (cartItems.length === 0) return;
 
-    if (!validate()) {
+    const validation = validate();
+    if (!validation.isValid) {
       // Scroll to first error
-      const firstErrorKey = Object.keys(errors)[0];
-      if (firstErrorKey) {
-        const el = document.getElementById(`field-${firstErrorKey}`);
+      if (validation.firstErrorKey) {
+        const el = document.getElementById(`field-${validation.firstErrorKey}`);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       return;
@@ -115,6 +120,7 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
       totalUSD: totalETB,
       currency: 'ETB',
       totalInCurrency: totalETB,
+      paymentMethod,
       status: 'Pending'
     };
 
@@ -631,6 +637,34 @@ export const CheckoutView: React.FC<CheckoutViewProps> = ({
                 <div className="flex justify-between text-lg font-bold text-[#231B15] pt-3 border-t border-[#E5DFD3]">
                   <span>Total</span>
                   <span className="text-[#B8860B]">ETB {totalETB.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Payment Method Selector */}
+              <div className="space-y-3 pt-3 border-t border-[#E5DFD3]">
+                <label className="block font-serif font-bold text-xs uppercase tracking-wider text-[#231B15]">
+                  Payment Method
+                </label>
+                <div className="grid grid-cols-2 gap-2 text-xs font-serif">
+                  {[
+                    { id: 'TeleBirr', label: 'TeleBirr' },
+                    { id: 'CBE Birr', label: 'CBE Birr' },
+                    { id: 'Cash on Delivery', label: 'Cash on Delivery' },
+                    { id: 'Bank Transfer', label: 'Bank Transfer' },
+                  ].map((method) => (
+                    <button
+                      key={method.id}
+                      type="button"
+                      onClick={() => setPaymentMethod(method.id as any)}
+                      className={`p-2.5 rounded-xl border text-center transition cursor-pointer font-bold ${
+                        paymentMethod === method.id
+                          ? 'bg-[#231B15] text-[#D4AF37] border-[#231B15] shadow-xs'
+                          : 'bg-white text-gray-700 border-[#E5DFD3] hover:border-[#B8860B]'
+                      }`}
+                    >
+                      {method.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 

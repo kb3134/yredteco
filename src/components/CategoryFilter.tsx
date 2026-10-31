@@ -101,6 +101,22 @@ export const CategoryFilter: React.FC<CategoryFilterProps> = ({
           {/* Right Controls: Sort & Filter Toggle */}
           <div className="flex items-center justify-between lg:justify-end gap-3 text-xs pt-1 lg:pt-0 border-t lg:border-t-0 border-amber-200/50">
             
+            {/* Sort Selector */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-serif uppercase tracking-wider text-gray-500 hidden sm:inline">Sort:</span>
+              <select
+                value={sortBy}
+                onChange={(e) => onSortChange(e.target.value)}
+                className="px-3 py-1.5 bg-white border border-[#D4AF37]/50 rounded-sm text-xs font-serif text-[#1A1817] focus:outline-none focus:ring-1 focus:ring-[#D4AF37] cursor-pointer"
+                aria-label="Sort products"
+              >
+                <option value="featured">Featured First</option>
+                <option value="newest">Newest Arrivals</option>
+                <option value="price-asc">Price: Low to High</option>
+                <option value="price-desc">Price: High to Low</option>
+              </select>
+            </div>
+
             {/* Filters Button with Count Badge */}
             <button
               onClick={() => setIsFilterPanelOpen(!isFilterPanelOpen)}

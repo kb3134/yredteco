@@ -1269,13 +1269,13 @@ function saveDatabase(): void {
     const activeProvider = detectActiveStorageProvider();
     if (activeProvider.provider === 'github') {
       syncProductsJsonToGitHub(productsDb).catch(err => {
-        console.error('[GitHub Sync] Error syncing products to GitHub:', err.message);
+        console.warn('[GitHub Sync] Products sync notice:', err?.message || err);
       });
       syncBrandingJsonToGitHub(brandingDb).catch(err => {
-        console.error('[GitHub Sync] Error syncing branding to GitHub:', err.message);
+        console.warn('[GitHub Sync] Branding sync notice:', err?.message || err);
       });
       syncDatabaseJsonToGitHub(payload).catch(err => {
-        console.error('[GitHub Sync] Error syncing database to GitHub:', err.message);
+        console.warn('[GitHub Sync] Database sync notice:', err?.message || err);
       });
     }
   } catch (e) {
@@ -2107,6 +2107,10 @@ app.put('/api/currency-rates', (req, res) => {
       ...currencyRatesDb,
       ...(req.body || {})
     };
+    saveDatabase();
+    setSqlSetting('currencyRates', currencyRatesDb).catch(err => {
+      console.warn('[Cloud SQL] Failed to save currency rates setting:', err.message);
+    });
     res.json({ message: 'Currency rates updated successfully', currencyRates: currencyRatesDb });
   } catch (err) {
     console.error('Error updating currency rates:', err);
@@ -2525,6 +2529,10 @@ app.patch('/api/orders/:id', (req, res) => {
   };
 
   ordersDb[index] = updatedOrder;
+  saveDatabase();
+  upsertSqlOrder(updatedOrder).catch(err => {
+    console.warn(`[Cloud SQL] Failed to update order ${updatedOrder.id}:`, err.message);
+  });
   res.json({ message: 'Order updated successfully', order: updatedOrder });
 });
 
@@ -2542,6 +2550,10 @@ app.put('/api/orders/:id', (req, res) => {
   };
 
   ordersDb[index] = updatedOrder;
+  saveDatabase();
+  upsertSqlOrder(updatedOrder).catch(err => {
+    console.warn(`[Cloud SQL] Failed to update order ${updatedOrder.id}:`, err.message);
+  });
   res.json({ message: 'Order updated successfully', order: updatedOrder });
 });
 
@@ -2555,6 +2567,11 @@ app.patch('/api/orders/:id/status', (req, res) => {
   if (req.body.status) {
     ordersDb[index].status = req.body.status;
   }
+
+  saveDatabase();
+  upsertSqlOrder(ordersDb[index]).catch(err => {
+    console.warn(`[Cloud SQL] Failed to update order status ${ordersDb[index].id}:`, err.message);
+  });
 
   res.json({ message: 'Order status updated successfully', order: ordersDb[index] });
 });
@@ -3009,13 +3026,15 @@ async function startServer() {
 
   const storageConfig = detectActiveStorageProvider();
   console.log(`[Storage] Active Provider: ${storageConfig.providerName} (Cloud Ready: ${storageConfig.isCloudReady})`);
-  if (storageConfig.isCloudReady) {
+  if (storageConfig.isCloudReady && storageConfig.provider !== 'local') {
     migrateAllToCloudStorageAsync()
       .then(res => {
-        console.log(`[Storage Auto-Sync] Sync completed. Migrated: ${res.migratedCount} images to ${res.provider}.`);
+        if (res.migratedCount > 0) {
+          console.log(`[Storage Auto-Sync] Sync completed. Migrated: ${res.migratedCount} images to ${res.provider}.`);
+        }
       })
       .catch(err => {
-        console.error('[Storage Auto-Sync] Background sync error:', err);
+        console.warn('[Storage Auto-Sync] Auto-sync notice:', err?.message || err);
       });
   }
 

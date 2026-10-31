@@ -62,6 +62,19 @@ function isDummyCredential(val?: string): boolean {
   return placeholders.some(p => str === p || str.includes('your_') || str.includes('change_me'));
 }
 
+// GitHub Auth Failure Tracking
+let githubAuthFailed = false;
+let githubAuthFailedReason = '';
+
+export function isGitHubAuthFailed(): boolean {
+  return githubAuthFailed;
+}
+
+export function resetGitHubAuthStatus(): void {
+  githubAuthFailed = false;
+  githubAuthFailedReason = '';
+}
+
 // Lazy Cloudinary Client
 let isCloudinaryConfigured = false;
 let cloudinaryAuthFailed = false;
@@ -172,6 +185,7 @@ export function detectActiveStorageProvider(): StorageConfigInfo {
   const githubRepo = githubConfig.repo;
 
   if (
+    !githubAuthFailed &&
     githubToken && !isDummyCredential(githubToken) &&
     githubOwner && !isDummyCredential(githubOwner) &&
     githubRepo && !isDummyCredential(githubRepo)
@@ -368,12 +382,14 @@ export async function uploadImageToPermanentStorage(
   }
 
   // 0. GITHUB REPOSITORY UPLOAD
-  if (config.provider === 'github') {
+  if (config.provider === 'github' && !githubAuthFailed) {
     try {
       const result = await uploadToGitHub(buffer, safeFilename, folder, finalMimeType);
       return result;
     } catch (err: any) {
-      console.warn('[CloudStorage] GitHub upload notice, using persistent local fallback:', err?.message || err);
+      if (!githubAuthFailed) {
+        console.info('[CloudStorage] GitHub upload unavailable, using persistent local fallback:', err?.message || err);
+      }
     }
   }
 
@@ -583,6 +599,10 @@ export function saveGitHubConfig(newConfig: {
   const configPath = path.join(DATA_DIR, 'github_config.json');
   fs.writeFileSync(configPath, JSON.stringify(merged, null, 2), 'utf8');
 
+  if (newConfig.token !== undefined) {
+    resetGitHubAuthStatus();
+  }
+
   if (merged.token) {
     process.env.GITHUB_TOKEN = merged.token;
   }
@@ -600,6 +620,10 @@ export function saveGitHubConfig(newConfig: {
 }
 
 async function uploadToGitHub(buffer: Buffer, safeFilename: string, folder: string, mimeType: string): Promise<StoredImageResult> {
+  if (githubAuthFailed) {
+    throw new Error('GitHub authentication is currently inactive (unauthorized or 401). Using local disk storage.');
+  }
+
   const config = getGitHubConfig();
   const token = config.token;
   const owner = config.owner;
@@ -625,14 +649,23 @@ async function uploadToGitHub(buffer: Buffer, safeFilename: string, folder: stri
         'User-Agent': 'E-Commerce-App'
       }
     });
+
+    if (getRes.status === 401 || getRes.status === 403) {
+      githubAuthFailed = true;
+      githubAuthFailedReason = `GitHub returned HTTP ${getRes.status}`;
+      console.info(`[CloudStorage] GitHub authentication notice (${getRes.status}). Switched to persistent local storage.`);
+      throw new Error(`GitHub credentials unauthenticated (${getRes.status})`);
+    }
+
     if (getRes.ok) {
       const fileData = await getRes.json() as any;
       if (fileData && fileData.sha) {
         existingSha = fileData.sha;
       }
     }
-  } catch {
-    // ignore
+  } catch (err: any) {
+    if (githubAuthFailed) throw err;
+    // ignore sha lookup failure if network glitch
   }
 
   const putBody: any = {
@@ -655,9 +688,16 @@ async function uploadToGitHub(buffer: Buffer, safeFilename: string, folder: stri
     body: JSON.stringify(putBody)
   });
 
+  if (putRes.status === 401 || putRes.status === 403) {
+    githubAuthFailed = true;
+    githubAuthFailedReason = `GitHub returned HTTP ${putRes.status}`;
+    console.info(`[CloudStorage] GitHub authentication notice (${putRes.status}). Switched to persistent local storage.`);
+    throw new Error(`GitHub credentials unauthenticated (${putRes.status})`);
+  }
+
   if (!putRes.ok) {
     const errText = await putRes.text().catch(() => '');
-    throw new Error(`GitHub API upload failed (status ${putRes.status}): ${errText.slice(0, 200)}`);
+    throw new Error(`GitHub API upload status (${putRes.status}): ${errText.slice(0, 200)}`);
   }
 
   const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${repoPath}`;
@@ -673,6 +713,7 @@ async function uploadToGitHub(buffer: Buffer, safeFilename: string, folder: stri
 }
 
 async function deleteFromGitHub(publicIdOrUrl: string): Promise<boolean> {
+  if (githubAuthFailed) return false;
   const config = getGitHubConfig();
   const token = config.token;
   const owner = config.owner;
@@ -712,8 +753,13 @@ async function deleteFromGitHub(publicIdOrUrl: string): Promise<boolean> {
         'User-Agent': 'E-Commerce-App'
       }
     });
+
+    if (getRes.status === 401 || getRes.status === 403) {
+      githubAuthFailed = true;
+      return false;
+    }
+
     if (!getRes.ok) {
-      console.warn(`[GitHub Storage] File not found on GitHub for deletion: ${repoPath}`);
       return false;
     }
     const fileData = await getRes.json() as any;
@@ -735,9 +781,13 @@ async function deleteFromGitHub(publicIdOrUrl: string): Promise<boolean> {
       })
     });
 
+    if (delRes.status === 401 || delRes.status === 403) {
+      githubAuthFailed = true;
+      return false;
+    }
+
     return delRes.ok;
-  } catch (err) {
-    console.warn('[GitHub Storage] Delete error:', err);
+  } catch {
     return false;
   }
 }
@@ -783,6 +833,19 @@ export async function testGitHubStorageConnection(customConfig?: {
       }
     });
 
+    if (res.status === 401 || res.status === 403) {
+      githubAuthFailed = true;
+      githubAuthFailedReason = `GitHub returned HTTP ${res.status}`;
+      return {
+        success: false,
+        message: `GitHub authentication failed (${res.status}): Invalid or unauthorized personal access token. Using persistent local storage.`,
+        repo,
+        owner,
+        branch,
+        hasToken: true
+      };
+    }
+
     if (!res.ok) {
       const err = await res.text().catch(() => '');
       let cleanMsg = err.slice(0, 150);
@@ -792,13 +855,17 @@ export async function testGitHubStorageConnection(customConfig?: {
       } catch {}
       return {
         success: false,
-        message: `GitHub repository check failed (${res.status}): ${cleanMsg}`,
+        message: `GitHub repository check (${res.status}): ${cleanMsg}`,
         repo,
         owner,
         branch,
         hasToken: true
       };
     }
+
+    // Successfully connected
+    githubAuthFailed = false;
+    githubAuthFailedReason = '';
 
     const data = await res.json() as any;
     const permissions = data?.permissions || {};
@@ -817,7 +884,7 @@ export async function testGitHubStorageConnection(customConfig?: {
   } catch (err: any) {
     return {
       success: false,
-      message: `Network error connecting to GitHub: ${err.message}`,
+      message: `Network notice connecting to GitHub: ${err.message}`,
       repo,
       owner,
       branch,
@@ -830,6 +897,7 @@ export async function testGitHubStorageConnection(customConfig?: {
  * Synchronizes the complete products list to products.json inside the user's GitHub repository.
  */
 export async function syncProductsJsonToGitHub(products: Product[]): Promise<void> {
+  if (githubAuthFailed) return;
   const config = detectActiveStorageProvider();
   if (config.provider !== 'github') return;
 
@@ -839,10 +907,7 @@ export async function syncProductsJsonToGitHub(products: Product[]): Promise<voi
   const repo = githubConfig.repo;
   const branch = githubConfig.branch;
 
-  if (!token) {
-    console.warn('[GitHub Sync] GITHUB_TOKEN is missing. Skipping products JSON sync.');
-    return;
-  }
+  if (!token) return;
 
   const repoPath = 'data/products.json';
   const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${repoPath}`;
@@ -858,14 +923,21 @@ export async function syncProductsJsonToGitHub(products: Product[]): Promise<voi
         'User-Agent': 'E-Commerce-App'
       }
     });
+
+    if (getRes.status === 401 || getRes.status === 403) {
+      githubAuthFailed = true;
+      console.info(`[GitHub Sync] GitHub API unauthorized (${getRes.status}). Safe fallback: products catalog persisted locally in data/products.json.`);
+      return;
+    }
+
     if (getRes.ok) {
       const fileData = await getRes.json() as any;
       if (fileData && fileData.sha) {
         existingSha = fileData.sha;
       }
     }
-  } catch (err: any) {
-    console.error('[GitHub Sync] Error fetching existing products.json SHA:', err.message);
+  } catch {
+    if (githubAuthFailed) return;
   }
 
   const putBody: any = {
@@ -889,14 +961,22 @@ export async function syncProductsJsonToGitHub(products: Product[]): Promise<voi
       body: JSON.stringify(putBody)
     });
 
+    if (putRes.status === 401 || putRes.status === 403) {
+      githubAuthFailed = true;
+      console.info(`[GitHub Sync] GitHub API unauthorized (${putRes.status}). Safe fallback: products catalog persisted locally in data/products.json.`);
+      return;
+    }
+
     if (!putRes.ok) {
       const errText = await putRes.text().catch(() => '');
-      console.error(`[GitHub Sync] Sync products catalog failed (${putRes.status}): ${errText.slice(0, 200)}`);
+      console.warn(`[GitHub Sync] Sync products catalog notice (${putRes.status}): ${errText.slice(0, 150)}`);
     } else {
       console.log(`[GitHub Sync] Successfully synchronized ${products.length} products to GitHub (${repoPath})`);
     }
   } catch (err: any) {
-    console.error('[GitHub Sync] Sync error:', err.message);
+    if (!githubAuthFailed) {
+      console.warn('[GitHub Sync] Products sync notice:', err?.message || err);
+    }
   }
 }
 
@@ -904,6 +984,7 @@ export async function syncProductsJsonToGitHub(products: Product[]): Promise<voi
  * Fetches the products.json catalog file directly from the GitHub repository.
  */
 export async function fetchProductsJsonFromGitHub(): Promise<Product[] | null> {
+  if (githubAuthFailed) return null;
   const config = detectActiveStorageProvider();
   if (config.provider !== 'github') return null;
 
@@ -927,6 +1008,11 @@ export async function fetchProductsJsonFromGitHub(): Promise<Product[] | null> {
       }
     });
 
+    if (res.status === 401 || res.status === 403) {
+      githubAuthFailed = true;
+      return null;
+    }
+
     if (res.ok) {
       const text = await res.text();
       const parsed = JSON.parse(text);
@@ -936,7 +1022,9 @@ export async function fetchProductsJsonFromGitHub(): Promise<Product[] | null> {
       }
     }
   } catch (err: any) {
-    console.warn('[GitHub Sync] Products catalog file is not yet available on GitHub:', err.message);
+    if (!githubAuthFailed) {
+      console.warn('[GitHub Sync] Products catalog file is not yet available on GitHub:', err?.message || err);
+    }
   }
   return null;
 }
@@ -945,6 +1033,7 @@ export async function fetchProductsJsonFromGitHub(): Promise<Product[] | null> {
  * Synchronizes the live branding images configuration to branding.json in GitHub repository.
  */
 export async function syncBrandingJsonToGitHub(branding: BrandingImages): Promise<void> {
+  if (githubAuthFailed) return;
   const config = detectActiveStorageProvider();
   if (config.provider !== 'github') return;
 
@@ -970,6 +1059,13 @@ export async function syncBrandingJsonToGitHub(branding: BrandingImages): Promis
         'User-Agent': 'E-Commerce-App'
       }
     });
+
+    if (getRes.status === 401 || getRes.status === 403) {
+      githubAuthFailed = true;
+      console.info(`[GitHub Sync] GitHub API unauthorized (${getRes.status}). Safe fallback: branding persisted locally in data/branding.json.`);
+      return;
+    }
+
     if (getRes.ok) {
       const fileData = await getRes.json() as any;
       if (fileData && fileData.sha) {
@@ -977,7 +1073,7 @@ export async function syncBrandingJsonToGitHub(branding: BrandingImages): Promis
       }
     }
   } catch {
-    // ignore
+    if (githubAuthFailed) return;
   }
 
   const putBody: any = {
@@ -1001,14 +1097,22 @@ export async function syncBrandingJsonToGitHub(branding: BrandingImages): Promis
       body: JSON.stringify(putBody)
     });
 
+    if (putRes.status === 401 || putRes.status === 403) {
+      githubAuthFailed = true;
+      console.info(`[GitHub Sync] GitHub API unauthorized (${putRes.status}). Safe fallback: branding persisted locally in data/branding.json.`);
+      return;
+    }
+
     if (!putRes.ok) {
       const errText = await putRes.text().catch(() => '');
-      console.error(`[GitHub Sync] Sync branding failed (${putRes.status}): ${errText.slice(0, 200)}`);
+      console.warn(`[GitHub Sync] Sync branding notice (${putRes.status}): ${errText.slice(0, 150)}`);
     } else {
       console.log(`[GitHub Sync] Successfully synchronized branding configuration to GitHub (${repoPath})`);
     }
   } catch (err: any) {
-    console.error('[GitHub Sync] Error syncing branding:', err.message);
+    if (!githubAuthFailed) {
+      console.warn('[GitHub Sync] Error syncing branding:', err?.message || err);
+    }
   }
 }
 
@@ -1016,6 +1120,7 @@ export async function syncBrandingJsonToGitHub(branding: BrandingImages): Promis
  * Fetches the branding.json configuration directly from the GitHub repository.
  */
 export async function fetchBrandingJsonFromGitHub(): Promise<BrandingImages | null> {
+  if (githubAuthFailed) return null;
   const config = detectActiveStorageProvider();
   if (config.provider !== 'github') return null;
 
@@ -1039,6 +1144,11 @@ export async function fetchBrandingJsonFromGitHub(): Promise<BrandingImages | nu
       }
     });
 
+    if (res.status === 401 || res.status === 403) {
+      githubAuthFailed = true;
+      return null;
+    }
+
     if (res.ok) {
       const text = await res.text();
       const parsed = JSON.parse(text);
@@ -1048,7 +1158,9 @@ export async function fetchBrandingJsonFromGitHub(): Promise<BrandingImages | nu
       }
     }
   } catch (err: any) {
-    console.warn('[GitHub Sync] Branding config file not yet available on GitHub:', err.message);
+    if (!githubAuthFailed) {
+      console.warn('[GitHub Sync] Branding config file not yet available on GitHub:', err?.message || err);
+    }
   }
   return null;
 }
@@ -1057,6 +1169,7 @@ export async function fetchBrandingJsonFromGitHub(): Promise<BrandingImages | nu
  * Synchronizes full application db.json state (orders, studio images, etc.) to GitHub.
  */
 export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
+  if (githubAuthFailed) return;
   const config = detectActiveStorageProvider();
   if (config.provider !== 'github') return;
 
@@ -1082,6 +1195,13 @@ export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
         'User-Agent': 'E-Commerce-App'
       }
     });
+
+    if (getRes.status === 401 || getRes.status === 403) {
+      githubAuthFailed = true;
+      console.info(`[GitHub Sync] GitHub API unauthorized (${getRes.status}). Safe fallback: database persisted locally in data/db.json.`);
+      return;
+    }
+
     if (getRes.ok) {
       const fileData = await getRes.json() as any;
       if (fileData && fileData.sha) {
@@ -1089,7 +1209,7 @@ export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
       }
     }
   } catch {
-    // ignore
+    if (githubAuthFailed) return;
   }
 
   const putBody: any = {
@@ -1102,7 +1222,7 @@ export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
   }
 
   try {
-    await fetch(apiUrl, {
+    const putRes = await fetch(apiUrl, {
       method: 'PUT',
       headers: {
         'Authorization': `Bearer ${token}`,
@@ -1112,9 +1232,23 @@ export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
       },
       body: JSON.stringify(putBody)
     });
-    console.log(`[GitHub Sync] Successfully synchronized full database to GitHub (${repoPath})`);
+
+    if (putRes.status === 401 || putRes.status === 403) {
+      githubAuthFailed = true;
+      console.info(`[GitHub Sync] GitHub API unauthorized (${putRes.status}). Safe fallback: database persisted locally in data/db.json.`);
+      return;
+    }
+
+    if (!putRes.ok) {
+      const errText = await putRes.text().catch(() => '');
+      console.warn(`[GitHub Sync] Sync full db notice (${putRes.status}): ${errText.slice(0, 150)}`);
+    } else {
+      console.log(`[GitHub Sync] Successfully synchronized full database to GitHub (${repoPath})`);
+    }
   } catch (err: any) {
-    console.error('[GitHub Sync] Error syncing full db state:', err.message);
+    if (!githubAuthFailed) {
+      console.warn('[GitHub Sync] Notice syncing full db state:', err?.message || err);
+    }
   }
 }
 
@@ -1122,6 +1256,7 @@ export async function syncDatabaseJsonToGitHub(dbState: any): Promise<void> {
  * Fetches the full db.json database state from GitHub.
  */
 export async function fetchDatabaseJsonFromGitHub(): Promise<any | null> {
+  if (githubAuthFailed) return null;
   const config = detectActiveStorageProvider();
   if (config.provider !== 'github') return null;
 
@@ -1145,6 +1280,11 @@ export async function fetchDatabaseJsonFromGitHub(): Promise<any | null> {
       }
     });
 
+    if (res.status === 401 || res.status === 403) {
+      githubAuthFailed = true;
+      return null;
+    }
+
     if (res.ok) {
       const text = await res.text();
       const parsed = JSON.parse(text);
@@ -1154,7 +1294,9 @@ export async function fetchDatabaseJsonFromGitHub(): Promise<any | null> {
       }
     }
   } catch (err: any) {
-    console.warn('[GitHub Sync] Database state not yet available on GitHub:', err.message);
+    if (!githubAuthFailed) {
+      console.warn('[GitHub Sync] Database state not yet available on GitHub:', err?.message || err);
+    }
   }
   return null;
 }

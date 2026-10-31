@@ -154,16 +154,25 @@ export const Header: React.FC<HeaderProps> = ({
               <Search className="w-5 h-5 sm:w-6 sm:h-6" />
             </button>
 
-            {/* Wishlist Icon */}
+            {/* Wishlist Icon with Dynamic Count */}
             <button
               onClick={onOpenWishlist}
-              className="p-1.5 sm:p-2.5 text-[#F5D77F] hover:text-red-400 transition relative cursor-pointer hover:scale-105 transform"
-              title="Wishlist"
-              aria-label="Wishlist"
+              className="p-1.5 sm:p-2.5 text-[#F5D77F] hover:text-[#FFF0C2] transition relative cursor-pointer hover:scale-105 active:scale-95 transform group"
+              title={`Wishlist (${wishlistCount} item${wishlistCount === 1 ? '' : 's'})`}
+              aria-label={`View Wishlist with ${wishlistCount} items`}
             >
-              <Heart className="w-5 h-5 sm:w-6 sm:h-6" />
+              <Heart 
+                className={`w-5 h-5 sm:w-6 sm:h-6 transition-all duration-300 ${
+                  wishlistCount > 0 
+                    ? 'text-[#F5D77F] fill-[#8B0000]/80 group-hover:fill-[#8B0000] drop-shadow-[0_0_6px_rgba(212,175,55,0.4)]' 
+                    : 'text-[#F5D77F] group-hover:text-white'
+                }`} 
+              />
               {wishlistCount > 0 && (
-                <span className="absolute top-0.5 right-0.5 sm:top-1 sm:right-1 bg-[#8B0000] text-white text-[9px] sm:text-[10px] min-w-[17px] h-4.5 rounded-full flex items-center justify-center font-extrabold shadow-md border border-[#D4AF37] px-1">
+                <span 
+                  key={wishlistCount}
+                  className="absolute top-0.5 right-0.5 sm:top-1 sm:right-1 bg-gradient-to-r from-[#8B0000] to-[#A00000] text-[#FFF0C2] text-[9px] sm:text-[10px] min-w-[18px] h-4.5 rounded-full flex items-center justify-center font-black shadow-md border border-[#D4AF37] px-1 animate-[bounce_0.6s_ease-out_1]"
+                >
                   {wishlistCount}
                 </span>
               )}
@@ -208,6 +217,27 @@ export const Header: React.FC<HeaderProps> = ({
                   <ChevronRight className="w-5 h-5 opacity-80 text-[#D4AF37]" />
                 </button>
               ))}
+
+              {/* Mobile Wishlist Quick Drawer Button */}
+              <button
+                onClick={() => {
+                  setMobileMenuOpen(false);
+                  onOpenWishlist();
+                }}
+                className="text-left py-3 px-4 rounded-xl text-base font-sans font-extrabold tracking-widest flex items-center justify-between transition border cursor-pointer bg-black/60 text-[#F5D77F] border-[#D4AF37]/50 hover:bg-black hover:text-[#FFF0C2] mt-2"
+              >
+                <div className="flex items-center gap-2.5">
+                  <Heart className={`w-5 h-5 ${wishlistCount > 0 ? 'fill-[#8B0000] text-[#D4AF37]' : 'text-[#D4AF37]'}`} />
+                  <span>SAVED WISHLIST</span>
+                </div>
+                {wishlistCount > 0 ? (
+                  <span className="bg-[#8B0000] text-[#FFF0C2] text-xs font-black px-2.5 py-0.5 rounded-full border border-[#D4AF37]">
+                    {wishlistCount} {wishlistCount === 1 ? 'item' : 'items'}
+                  </span>
+                ) : (
+                  <span className="text-xs text-gray-400 font-normal">0 saved</span>
+                )}
+              </button>
             </div>
           </div>
         )}

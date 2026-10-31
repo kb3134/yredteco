@@ -20,11 +20,13 @@ export const RecentUploadsShowcase: React.FC<RecentUploadsShowcaseProps> = ({
   isWishlisted = (_id: string) => false,
   onToggleWishlist = () => {},
 }) => {
-  // Filter exclusively for Live Showcase products
+  // Filter for Live Showcase products, falling back gracefully to featured atelier pieces
   const liveshowProducts = products.filter(p => {
     return Boolean(p.collections && p.collections.includes('liveshow'));
   });
-  const recentProducts = liveshowProducts.slice(0, 4);
+  const recentProducts = liveshowProducts.length > 0
+    ? liveshowProducts.slice(0, 4)
+    : products.filter(p => p.isFeatured || p.isNewArrival).slice(0, 4);
 
   return (
     <section className="relative py-20 bg-[#120D0A] border-y border-[#3A2A1D] text-[#FAF0D7] overflow-hidden">
